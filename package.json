@@ -1,6 +1,6 @@
 {
   "name": "reprogate",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "论文复现前置审计与最小验证平台",
   "type": "module",
