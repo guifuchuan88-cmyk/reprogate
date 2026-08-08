@@ -1,34 +1,18 @@
 {
-  "schema": "reprospec/v0.1",
-  "project": "Uni-MoE: Scaling Unified Multimodal Models",
-  "snapshot": {
-    "paper_sha256": "9be7-demo-a82c",
-    "git_commit": "a81d9c"
+  "schema": "reprogate/reprospec/v0.2",
+  "mode": "sample",
+  "deprecatedExampleName": true,
+  "notice": "This legacy filename now contains an explicitly labeled static sample. Use repository-audit-example.json for the canonical v0.2 shape.",
+  "capability": {
+    "repositoryStaticAudit": true,
+    "paperContentParsed": false,
+    "codeExecuted": false,
+    "externalAssetsVerified": false
   },
-  "claim": {
-    "id": "C-01",
-    "text": "Uni-MoE 在 ActivityNet-QA 上达到 52.7% 准确率",
-    "evidence": "Table 2, page 8"
+  "repository": {
+    "fullName": "sample/research-repository",
+    "commitSha": "sample-only-not-a-live-commit"
   },
   "readiness": 64,
-  "blockers": [
-    {
-      "code": "ARTIFACT_MISSING",
-      "item": "Uni-MoE-7B checkpoint",
-      "severity": "critical",
-      "evidence": "README.md:184"
-    },
-    {
-      "code": "PAPER_CODE_MISMATCH",
-      "item": "frame sampling 32 vs 16",
-      "severity": "high",
-      "evidence": "paper page 7 vs configs/activitynet.yaml:24"
-    }
-  ],
-  "minimal_verification": {
-    "command": "python evaluate.py --config configs/activitynet_5pct.yaml",
-    "expected_time": "18 minutes",
-    "expected_cost_cny": 2.4
-  },
-  "human_approval": false
+  "statusLabel": "SAMPLE · 有条件进入验证"
 }
