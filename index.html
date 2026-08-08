@@ -4,19 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#132b27" />
-    <meta name="description" content="ReproGate 实时扫描公开 GitHub 仓库，生成带证据的复现风险与最小验证建议。" />
+    <meta name="description" content="ReproGate 扫描公开研究仓库，并用可执行行业样例验证证据、公式与复现风险。" />
     <meta property="og:type" content="website" />
-    <meta property="og:title" content="ReproGate — Live Repository Audit" />
-    <meta property="og:description" content="在烧掉 GPU 小时之前，先知道哪里会失败。" />
+    <meta property="og:title" content="ReproGate — Evidence-first Reproduction Audit" />
+    <meta property="og:description" content="审计研究仓库与金融推理证据，在投入算力或发布答案前定位失败。" />
     <meta property="og:url" content="https://guifuchuan88-cmyk.github.io/reprogate/" />
     <meta property="og:image" content="https://guifuchuan88-cmyk.github.io/reprogate/public/og.png" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="ReproGate — Live Repository Audit" />
-    <meta name="twitter:description" content="在烧掉 GPU 小时之前，先知道哪里会失败。" />
+    <meta name="twitter:title" content="ReproGate — Evidence-first Reproduction Audit" />
+    <meta name="twitter:description" content="审计研究仓库与金融推理证据，在投入算力或发布答案前定位失败。" />
     <meta name="twitter:image" content="https://guifuchuan88-cmyk.github.io/reprogate/public/og.png" />
     <link rel="icon" href="./public/favicon.svg" />
-    <link rel="stylesheet" href="./src/styles.css?v=0.2.1" />
-    <title>ReproGate — Live Repository Audit</title>
+    <link rel="stylesheet" href="./src/styles.css?v=0.3.0" />
+    <title>ReproGate — Evidence-first Reproduction Audit</title>
   </head>
   <body>
     <div id="app">
@@ -27,8 +27,9 @@
             <div><strong>ReproGate</strong><span>RESEARCH READINESS</span></div>
           </div>
           <div class="nav-actions">
-            <span class="version-pill">LIVE · v0.2</span>
+            <span class="version-pill">LIVE · v0.3</span>
             <a href="#principles">设计原则</a>
+            <button class="nav-lab-button" id="nav-finance-button">金融实验</button>
             <a class="github-link" href="https://github.com/guifuchuan88-cmyk/reprogate" target="_blank" rel="noreferrer">GitHub ↗</a>
           </div>
         </header>
@@ -64,6 +65,11 @@
                 <button class="primary-button" id="start-button" disabled><span class="button-label">开始真实扫描</span><span>→</span></button>
                 <button class="sample-button" id="sample-button"><span>▶</span> 查看已完成样例</button>
               </div>
+              <button class="industry-entry" id="finance-lab-button">
+                <span class="industry-index">INDUSTRY LAB 01</span>
+                <span class="industry-copy"><strong>可审计金融推理</strong><small>FinanceBench × FinQA 方法切片 · 内置样例 · 无需 API Key</small></span>
+                <b>打开实验 →</b>
+              </button>
             </div>
 
             <div class="trust-row" id="principles">
@@ -91,6 +97,6 @@
         <footer class="landing-footer"><span>PROVENANCE FIRST</span><span>MINIMUM VERIFICATION</span><span>HUMAN APPROVAL</span><span>FAILURE AS DATA</span></footer>
       </main>
     </div>
-    <script type="module" src="./src/app.js?v=0.2.1"></script>
+    <script type="module" src="./src/app.js?v=0.3.0"></script>
   </body>
 </html>
