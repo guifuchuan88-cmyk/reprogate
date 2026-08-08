@@ -1,4 +1,4 @@
-import { analyzeRepository, parseGitHubRepository, RepositoryAnalysisError } from "./github-analyzer.js";
+import { analyzeRepository, parseGitHubRepository, RepositoryAnalysisError } from "./github-analyzer.js?v=0.2.1";
 
 const app = document.querySelector("#app");
 const state = { analysis: null, view: "overview", paper: null, logs: [] };
