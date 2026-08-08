@@ -1,132 +1,389 @@
-const claims = [
-  { id: "c1", label: "C-01", title: "Uni-MoE 在 ActivityNet-QA 上达到 52.7% 准确率", source: "Table 2 · Page 8", metric: "Accuracy 52.7%", confidence: 96, risks: 2 },
-  { id: "c2", label: "C-02", title: "Token Router 将推理延迟降低 31%", source: "Figure 4 · Page 10", metric: "Latency −31%", confidence: 88, risks: 1 },
-  { id: "c3", label: "C-03", title: "单张 24GB GPU 可完成完整推理", source: "Section 4.1 · Page 7", metric: "VRAM ≤ 24GB", confidence: 72, risks: 3 },
-];
+import { analyzeRepository, parseGitHubRepository, RepositoryAnalysisError } from "./github-analyzer.js";
 
-const plans = {
-  smoke: { name: "Smoke Test", subtitle: "确认仓库与模型能够启动", time: "3 分钟", cost: "¥0.08", confidence: "低", command: "python tools/smoke_test.py --config configs/demo.yaml" },
-  minimal: { name: "Minimal Verification", subtitle: "用 5% 数据验证核心 Claim", time: "18 分钟", cost: "¥2.40", confidence: "中高", command: "python evaluate.py --config configs/activitynet_5pct.yaml" },
-  full: { name: "Full Reproduction", subtitle: "运行论文报告的完整评测", time: "11.5 小时", cost: "¥86.00", confidence: "高", command: "bash scripts/reproduce_activitynet.sh" },
-};
-
-const state = { activeClaim: "c1", view: "overview", selectedPlan: "minimal", approved: false };
 const app = document.querySelector("#app");
-const paperInput = document.querySelector("#paper-input");
-const repoInput = document.querySelector("#repo-input");
-const startButton = document.querySelector("#start-button");
+const state = { analysis: null, view: "overview", paper: null, logs: [] };
 
-function updateStartState() { startButton.disabled = !(paperInput.files.length || repoInput.value.trim()); }
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[character]);
+}
 
-paperInput.addEventListener("change", () => {
-  const name = paperInput.files[0]?.name;
-  if (name) {
-    document.querySelector("#file-name").textContent = name;
-    document.querySelector("#file-hint").textContent = "文件已就绪";
-    document.querySelector("#file-status").textContent = "✓";
-    document.querySelector("#file-drop").classList.add("has-file");
-  }
-  updateStartState();
-});
-repoInput.addEventListener("input", updateStartState);
-document.querySelector("#sample-button").addEventListener("click", () => {
-  repoInput.value = "https://github.com/reprogate-lab/uni-moe";
-  document.querySelector("#file-name").textContent = "uni-moe-paper.pdf";
-  document.querySelector("#file-hint").textContent = "示例文件已就绪";
-  document.querySelector("#file-status").textContent = "✓";
-  document.querySelector("#file-drop").classList.add("has-file");
-  startAnalysis();
-});
-startButton.addEventListener("click", startAnalysis);
-
-async function startAnalysis() {
-  const label = startButton.querySelector(".button-label");
-  startButton.disabled = true;
-  label.textContent = "正在建立证据快照…";
+function safeUrl(value, fallback = "#") {
   try {
-    await fetch("/api/demo-analysis", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ repository: repoInput.value || "demo", paper: document.querySelector("#file-name").textContent }) });
-  } catch { /* Static hosting fallback: the demo data remains available. */ }
-  window.setTimeout(renderDashboard, 700);
+    const url = new URL(value);
+    return url.protocol === "https:" ? url.href : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-function brand() { return `<span class="brand-mark" aria-hidden="true">R<span>G</span></span><div><strong>ReproGate</strong><span>RESEARCH READINESS</span></div>`; }
-
-function graph(expanded = false) {
-  return `<div class="evidence-graph ${expanded ? "expanded" : ""}">
-    <div class="graph-legend"><span><i class="dot green"></i>已验证</span><span><i class="dot amber"></i>需确认</span><span><i class="dot red"></i>阻塞</span></div>
-    <div class="graph-canvas"><div class="graph-node root-node"><small>CLAIM C-01</small><strong>Accuracy 52.7%</strong><span>论文核心结论</span></div><div class="branch-line vertical"></div><div class="branch-line horizontal"></div>
-      <div class="graph-children"><div class="graph-node status-green"><small>METRIC</small><strong>Accuracy</strong><span>evaluation.py ✓</span></div><div class="graph-node status-amber"><small>DATASET</small><strong>ActivityNet-QA</strong><span>预处理未确认</span></div><div class="graph-node status-red"><small>CHECKPOINT</small><strong>Uni-MoE-7B</strong><span>下载链接失效</span></div><div class="graph-node status-green"><small>CONFIG</small><strong>activitynet.yaml</strong><span>commit a81d9c ✓</span></div></div>
-    </div></div>`;
+function formatNumber(value) {
+  return new Intl.NumberFormat("zh-CN", { notation: Number(value) >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(Number(value || 0));
 }
 
-function claimList() {
-  return claims.map(item => `<button data-claim="${item.id}" class="${state.activeClaim === item.id ? "active" : ""}"><div class="claim-radio"><i></i></div><div class="claim-content"><span><b>${item.label}</b><small>${item.source}</small></span><strong>${item.title}</strong><div><em>${item.metric}</em><span>${item.confidence}% 证据置信度</span></div></div><span class="risk-count">${item.risks}</span></button>`).join("");
+function formatDate(value) {
+  if (!value) return "未知";
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? "未知" : new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
 
-function overview() {
-  const claim = claims.find(item => item.id === state.activeClaim) || claims[0];
-  return `<div class="dashboard-grid">
-    <section class="claim-panel panel"><div class="panel-heading"><div><span class="section-index">01</span><div><h2>选择目标 Claim</h2><p>只验证真正影响决策的结论</p></div></div><span class="count-pill">3 / 7</span></div><div class="claim-list">${claimList()}</div><button class="show-more">查看其余 4 条次要 Claim <span>↓</span></button></section>
-    <section class="graph-panel panel"><div class="panel-heading compact"><div><span class="section-index">02</span><div><h2>Claim—Artifact 证据图</h2><p>${claim.label} · ${claim.metric}</p></div></div><button class="icon-button" data-view="graph">↗</button></div>${graph()}</section>
-    <section class="risk-panel panel"><div class="panel-heading compact"><div><span class="section-index">03</span><div><h2>阻塞项与风险</h2><p>按预期影响排序</p></div></div><span class="danger-pill">2 BLOCKERS</span></div>
-      <div class="risk-card critical"><div class="risk-card-top"><span>CRITICAL · ARTIFACT_MISSING</span><b>风险 9.2</b></div><h3>预训练 Checkpoint 下载链接已失效</h3><p>README 指向的云盘返回 404，目标 Claim 需要 Uni-MoE-7B 权重才能运行评测。</p><div class="evidence-box"><span>证据</span><code>README.md:184 → drive.google.com/.../weights</code><b>404</b></div><div class="risk-actions"><button>查看来源 ↗</button><button>标记为已解决</button></div></div>
-      <div class="risk-card high"><div class="risk-card-top"><span>HIGH · PAPER_CODE_MISMATCH</span><b>风险 7.4</b></div><h3>视频帧采样数量不一致</h3><p>论文写明每段采样 32 帧，仓库默认配置为 16 帧，可能影响表 2 的准确率。</p><div class="comparison-row"><span>论文 <b>32 frames</b></span><i>≠</i><span>代码 <b>16 frames</b></span></div><div class="risk-actions"><button>查看差异 ↗</button><button>接受论文配置</button></div></div>
-      <div class="notice-card"><span>i</span><p><b>1 个待确认项</b>随机种子未在论文中披露，预计影响 ±0.6 accuracy。</p></div></section>
-    <section class="decision-panel"><div><span class="decision-icon">⌁</span><div><small>NEXT BEST ACTION</small><h2>先运行 5% 数据的最小验证</h2><p>预计可用 18 分钟、¥2.40 排除 78% 的核心失败风险。</p></div></div><button data-open-plan>生成验证方案 <span>→</span></button></section>
+function clampScore(value) { return Math.max(0, Math.min(100, Math.round(Number(value || 0)))); }
+
+function brand() {
+  return `<span class="brand-mark" aria-hidden="true">R<span>G</span></span><div><strong>ReproGate</strong><span>RESEARCH READINESS</span></div>`;
+}
+
+function addLog(label, detail, status = "done") {
+  state.logs.push({ at: new Date().toISOString(), label, detail, status });
+}
+
+function sampleAnalysis() {
+  const repository = {
+    owner: "openai", name: "whisper", fullName: "openai/whisper", url: "https://github.com/openai/whisper",
+    description: "Robust Speech Recognition via Large-Scale Weak Supervision", defaultBranch: "main", commitSha: "sample01",
+    language: "Python", stars: 0, forks: 0, openIssues: 0, license: "MIT", archived: false, updatedAt: "2026-08-08T00:00:00.000Z",
+  };
+  const proof = (path, detail) => ({ path, detail, source: "frozen sample", url: `${repository.url}/blob/main/${path}` });
+  const checks = [
+    { id: "dependency-lock", category: "环境", label: "依赖可锁定", status: "warning", summary: "检测到 requirements.txt，但样例快照没有依赖锁文件。", recommendation: "生成带哈希的锁文件并记录 Python、PyTorch 与 CUDA 版本。", evidence: proof("requirements.txt", "manifest present; lockfile missing") },
+    { id: "runbook", category: "文档", label: "可执行运行说明", status: "pass", summary: "README 包含安装与命令行运行示例。", recommendation: "补充固定输入与预期输出校验。", evidence: proof("README.md", "install + run commands") },
+    { id: "license", category: "治理", label: "许可证明确", status: "pass", summary: "检测到 MIT 许可证。", recommendation: "复现报告保留原仓库署名。", evidence: proof("LICENSE", "MIT") },
+    { id: "tests", category: "验证", label: "自动化验证入口", status: "pass", summary: "仓库包含测试目录，可执行基础回归。", recommendation: "增加针对模型资产下载失败的 smoke test。", evidence: proof("tests/", "test path detected") },
+    { id: "environment", category: "环境", label: "运行环境可描述", status: "warning", summary: "样例快照未检测到容器或 Conda 环境描述。", recommendation: "提供最小容器并锁定系统级音频依赖。", evidence: proof("README.md", "system dependencies documented only") },
+    { id: "assets", category: "资产", label: "数据与模型线索", status: "warning", summary: "模型权重在运行时从外部地址获取，静态扫描无法证明其内容未变化。", recommendation: "记录资产 URL、版本、许可证与 SHA-256。", evidence: proof("whisper/__init__.py", "external model registry") },
+    { id: "snapshot", category: "溯源", label: "不可变代码快照", status: "pass", summary: "样例报告锁定到演示快照。", recommendation: "真实扫描会记录完整 commit SHA。", evidence: proof("README.md", "sample snapshot") },
+  ];
+  const risks = checks.filter(item => item.status !== "pass").map((item, index) => ({
+    code: item.id.replace(/-/g, "_").toUpperCase(), severity: index === 0 ? "high" : "medium", score: index === 0 ? 7.2 : 5.4,
+    title: item.label, description: item.summary, recommendation: item.recommendation, evidence: item.evidence,
+  }));
+  return {
+    schema: "reprogate/repository-audit/v0.2", mode: "sample", analyzedAt: "2026-08-08T10:00:00.000Z",
+    methodology: "Frozen demonstration data; no live request was made", repository, files: { total: 84, treeTruncated: false, readmePath: "README.md", inspectedManifests: ["requirements.txt"] },
+    checks, risks, readiness: 74, statusLabel: "有条件进入验证", metrics: { passed: 4, warnings: 3, blockers: 0, total: 7, evidenceCoverage: 86 },
+    nextAction: { title: "先锁定依赖与模型资产", description: "生成依赖锁文件，并为外部模型权重记录版本和 SHA-256。", checklist: ["生成带哈希的 Python 锁文件", "记录模型权重 URL 与 SHA-256", "在全新环境运行固定音频 smoke test"] },
+  };
+}
+
+function normalizeAnalysis(raw) {
+  const checks = Array.isArray(raw.checks) ? raw.checks.map((item, index) => ({
+    id: item.id || `check-${index + 1}`,
+    category: item.category || "其他",
+    label: item.label || item.title || `检查 ${index + 1}`,
+    status: ["pass", "warning", "fail"].includes(item.status) ? item.status : "warning",
+    summary: item.summary || item.description || "暂无说明",
+    recommendation: item.recommendation || "建议人工复核。",
+    evidence: typeof item.evidence === "object" && item.evidence ? item.evidence : { path: item.path || "repository metadata", detail: String(item.evidence || "") },
+  })) : [];
+  const passed = checks.filter(item => item.status === "pass").length;
+  const warnings = checks.filter(item => item.status === "warning").length;
+  const blockers = checks.filter(item => item.status === "fail").length;
+  const risks = Array.isArray(raw.risks) ? raw.risks : checks.filter(item => item.status !== "pass").map(item => ({ title: item.label, description: item.summary, recommendation: item.recommendation, evidence: item.evidence, severity: item.status === "fail" ? "critical" : "medium" }));
+  return {
+    ...raw,
+    mode: raw.mode === "sample" ? "sample" : "live",
+    analyzedAt: raw.analyzedAt || new Date().toISOString(),
+    repository: raw.repository || {},
+    files: raw.files || {},
+    checks,
+    risks,
+    readiness: clampScore(raw.readiness),
+    metrics: { passed, warnings, blockers, total: checks.length, evidenceCoverage: raw.metrics?.evidenceCoverage ?? 0, ...raw.metrics },
+    statusLabel: raw.statusLabel || (blockers ? "存在前置阻塞" : "有条件进入验证"),
+    nextAction: raw.nextAction || { title: "人工复核关键证据", description: "静态扫描之后仍需在隔离环境运行最小验证。", checklist: [] },
+  };
+}
+
+function setupElements() {
+  return {
+    paper: document.querySelector("#paper-input"), repo: document.querySelector("#repo-input"), start: document.querySelector("#start-button"),
+    sample: document.querySelector("#sample-button"), validation: document.querySelector("#repo-validation"), error: document.querySelector("#form-error"),
+    progress: document.querySelector("#analysis-progress"), progressBar: document.querySelector("#progress-bar"), progressTitle: document.querySelector("#progress-title"), progressDetail: document.querySelector("#progress-detail"),
+  };
+}
+
+function validateRepositoryInput(elements, { announce = true } = {}) {
+  const value = elements.repo.value.trim();
+  if (!value) {
+    elements.start.disabled = true;
+    if (announce) elements.validation.textContent = "";
+    return null;
+  }
+  try {
+    const parsed = parseGitHubRepository(value);
+    elements.start.disabled = false;
+    elements.repo.closest(".repo-field").classList.remove("invalid");
+    if (announce) {
+      elements.validation.textContent = `✓ 将扫描 ${parsed.fullName}`;
+      elements.validation.className = "valid";
+    }
+    return parsed;
+  } catch (error) {
+    elements.start.disabled = true;
+    elements.repo.closest(".repo-field").classList.add("invalid");
+    if (announce) {
+      elements.validation.textContent = error.message;
+      elements.validation.className = "invalid";
+    }
+    return null;
+  }
+}
+
+function updateProgress(elements, percent, title, detail) {
+  elements.progress.hidden = false;
+  elements.progressBar.style.width = `${percent}%`;
+  elements.progressTitle.textContent = title;
+  elements.progressDetail.textContent = detail;
+}
+
+async function fingerprintPaper(file) {
+  if (!file) return null;
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  const sha256 = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+  return { name: file.name, size: file.size, type: file.type, sha256, processing: "local fingerprint only; file content was not uploaded or parsed" };
+}
+
+function friendlyError(error) {
+  if (!(error instanceof RepositoryAnalysisError)) return { title: "扫描没有完成", detail: "发生了未预期的问题。请检查网络并重试，也可以先查看样例报告。" };
+  if (error.code === "RATE_LIMIT") {
+    const reset = error.details?.resetAt ? `预计恢复时间：${formatDate(error.details.resetAt)}。` : "";
+    return { title: "GitHub 匿名额度暂时用完", detail: `${reset}稍后重试，或先查看样例报告。` };
+  }
+  if (error.code === "NOT_FOUND") return { title: "找不到公开仓库", detail: "请确认仓库存在且为公开状态，并粘贴仓库首页地址。" };
+  if (error.code === "NETWORK") return { title: "无法连接 GitHub", detail: "请检查网络、代理或浏览器扩展后重试；本页不会自动改用演示数据。" };
+  return { title: error.message, detail: "请修正输入后重试；本页不会把失败伪装成成功结果。" };
+}
+
+function bindSetup() {
+  const elements = setupElements();
+  const queryRepo = new URLSearchParams(window.location.search).get("repo");
+  if (queryRepo) elements.repo.value = queryRepo;
+  validateRepositoryInput(elements, { announce: Boolean(queryRepo) });
+
+  elements.repo.addEventListener("input", () => {
+    elements.error.hidden = true;
+    validateRepositoryInput(elements);
+  });
+  elements.paper.addEventListener("change", () => {
+    const file = elements.paper.files[0];
+    const drop = document.querySelector("#file-drop");
+    if (!file) return;
+    if (file.type !== "application/pdf" || file.size > 25 * 1024 * 1024) {
+      elements.paper.value = "";
+      elements.error.innerHTML = "<strong>PDF 无法附加</strong><span>请选择 25MB 以内的 PDF 文件。</span>";
+      elements.error.hidden = false;
+      return;
+    }
+    document.querySelector("#file-name").textContent = file.name;
+    document.querySelector("#file-hint").textContent = `${(file.size / 1024 / 1024).toFixed(1)}MB · 扫描时仅计算 SHA-256`;
+    document.querySelector("#file-status").textContent = "✓";
+    drop.classList.add("has-file");
+  });
+  elements.sample.addEventListener("click", () => {
+    state.logs = [];
+    addLog("打开演示快照", "没有发起 GitHub 网络请求；所有数据均标记为 SAMPLE。", "sample");
+    state.analysis = normalizeAnalysis(sampleAnalysis());
+    renderReport();
+  });
+  elements.start.addEventListener("click", async () => {
+    const parsed = validateRepositoryInput(elements);
+    if (!parsed) return;
+    elements.start.disabled = true;
+    elements.error.hidden = true;
+    elements.repo.disabled = true;
+    elements.paper.disabled = true;
+    state.logs = [];
+    try {
+      updateProgress(elements, 12, "准备本地输入", "不会上传或解析 PDF 内容");
+      const paperPromise = fingerprintPaper(elements.paper.files[0]);
+      addLog("输入已验证", `目标公开仓库：${parsed.fullName}`);
+      const progressMap = {
+        metadata: [28, "读取公开元数据", "确认默认分支、许可证与维护状态"],
+        snapshot: [44, "锁定代码快照", "使用 commit SHA 避免分支继续变化"],
+        tree: [63, "扫描仓库证据", "检查依赖、文档、测试、环境与资产线索"],
+        rules: [84, "运行确定性规则", "每个结论都关联到文件或仓库元数据"],
+      };
+      const result = await analyzeRepository(parsed.url, {
+        fetchImpl: window.fetch.bind(window),
+        onProgress(step) {
+          const [percent, title, detail] = progressMap[step] || [50, "正在扫描", "读取公开仓库证据"];
+          updateProgress(elements, percent, title, detail);
+          addLog(title, detail);
+        },
+      });
+      state.paper = await paperPromise;
+      updateProgress(elements, 100, "生成审计报告", "整理风险、证据与最低成本下一步");
+      addLog("静态审计完成", `生成 ${result.checks?.length || 0} 项检查；未执行仓库代码。`);
+      state.analysis = normalizeAnalysis({ ...result, paper: state.paper });
+      window.setTimeout(renderReport, 260);
+    } catch (error) {
+      const message = friendlyError(error);
+      elements.error.innerHTML = `<strong>${escapeHtml(message.title)}</strong><span>${escapeHtml(message.detail)}</span>`;
+      elements.error.hidden = false;
+      elements.progress.hidden = true;
+      elements.start.disabled = false;
+      elements.repo.disabled = false;
+      elements.paper.disabled = false;
+      elements.start.querySelector(".button-label").textContent = "重新扫描";
+      addLog("扫描失败", `${error.code || "UNKNOWN"}: ${error.message}`, "error");
+    }
+  });
+}
+
+function statusText(status) { return status === "pass" ? "已验证" : status === "fail" ? "阻塞" : "需确认"; }
+function severityText(severity) { return ({ critical: "关键", high: "高", medium: "中", low: "低" })[severity] || "中"; }
+
+function sourceLink(proof, label = "查看来源 ↗") {
+  const url = safeUrl(proof?.url);
+  return url === "#" ? `<span class="source-unavailable">${escapeHtml(proof?.path || "仓库元数据")}</span>` : `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer">${escapeHtml(label)}</a>`;
+}
+
+function reportRail(analysis) {
+  const repo = analysis.repository;
+  return `<aside class="report-rail">
+    <button class="report-brand" data-reset>${brand()}</button>
+    <div class="rail-source"><small>SOURCE SNAPSHOT</small><strong>${escapeHtml(repo.fullName)}</strong><span>${escapeHtml(repo.defaultBranch || "main")} · ${escapeHtml((repo.commitSha || "unknown").slice(0, 7))}</span><a href="${escapeHtml(safeUrl(repo.url))}" target="_blank" rel="noreferrer">打开仓库 ↗</a></div>
+    <nav class="report-nav" aria-label="报告视图">
+      <button data-view="overview" class="${state.view === "overview" ? "active" : ""}"><span>01</span>决策总览</button>
+      <button data-view="evidence" class="${state.view === "evidence" ? "active" : ""}"><span>02</span>证据清单 <b>${analysis.checks.length}</b></button>
+      <button data-view="log" class="${state.view === "log" ? "active" : ""}"><span>03</span>分析记录</button>
+    </nav>
+    <div class="rail-boundary"><small>THIS AUDIT DID</small><p>读取公开元数据与文件树<br>运行确定性静态规则</p><small>DID NOT</small><p>不执行仓库代码<br>不解析论文正文<br>不验证外部资产可用性</p></div>
+  </aside>`;
+}
+
+function checkCards(analysis) {
+  return analysis.checks.map(item => `<article class="audit-check ${item.status}">
+    <div class="check-status"><i></i><span>${escapeHtml(item.category)}</span><b>${statusText(item.status)}</b></div>
+    <h3>${escapeHtml(item.label)}</h3><p>${escapeHtml(item.summary)}</p>
+    <div class="check-proof"><code>${escapeHtml(item.evidence?.path || "repository metadata")}</code><span>${escapeHtml(item.evidence?.detail || "")}</span></div>
+    <div class="check-footer">${sourceLink(item.evidence)}<button data-copy="${escapeHtml(item.recommendation)}">复制建议</button></div>
+  </article>`).join("");
+}
+
+function riskCards(analysis) {
+  if (!analysis.risks.length) return `<div class="empty-state"><span>✓</span><h3>没有静态阻塞项</h3><p>这不等于已经复现成功；下一步仍需隔离环境中的最小运行验证。</p></div>`;
+  return analysis.risks.map((risk, index) => `<article class="report-risk severity-${escapeHtml(risk.severity || "medium")}">
+    <div><span>${String(index + 1).padStart(2, "0")} · ${escapeHtml(risk.code || "REVIEW_REQUIRED")}</span><b>${severityText(risk.severity)}风险${risk.score ? ` · ${escapeHtml(risk.score)}` : ""}</b></div>
+    <h3>${escapeHtml(risk.title)}</h3><p>${escapeHtml(risk.description)}</p>
+    <div class="risk-evidence"><span>EVIDENCE</span><code>${escapeHtml(risk.evidence?.path || "repository metadata")}</code>${sourceLink(risk.evidence, "打开 ↗")}</div>
+    <small>建议：${escapeHtml(risk.recommendation || "人工复核该项。")}</small>
+  </article>`).join("");
+}
+
+function scoreExplanation(analysis) {
+  const { passed, warnings, blockers, total } = analysis.metrics;
+  return `${total} 项静态检查中，${passed} 项通过、${warnings} 项待确认、${blockers} 项阻塞。分数只表示仓库静态准备度，不代表论文结果已复现。`;
+}
+
+function overviewView(analysis) {
+  return `<div class="report-dashboard">
+    <section class="decision-brief">
+      <div class="brief-label"><span>NEXT BEST ACTION</span><b>01 / DECIDE</b></div>
+      <div><h2>${escapeHtml(analysis.nextAction.title)}</h2><p>${escapeHtml(analysis.nextAction.description)}</p></div>
+      <button data-checklist>导出验证任务单 <span>→</span></button>
+    </section>
+    <div class="metric-row">
+      <article><small>检查通过</small><strong>${analysis.metrics.passed}</strong><span>/${analysis.metrics.total} 项</span></article>
+      <article><small>待人工确认</small><strong>${analysis.metrics.warnings}</strong><span>静态证据不足</span></article>
+      <article><small>前置阻塞</small><strong>${analysis.metrics.blockers}</strong><span>建议先处理</span></article>
+      <article><small>扫描文件</small><strong>${formatNumber(analysis.files.total)}</strong><span>${analysis.files.treeTruncated ? "树被 GitHub 截断" : "完整树响应"}</span></article>
+    </div>
+    <section class="report-section checks-section"><div class="report-section-title"><div><span>02</span><div><h2>静态检查矩阵</h2><p>规则输出，不由语言模型生成；每项都附证据位置。</p></div></div><button data-view="evidence">查看证据表 →</button></div><div class="audit-check-grid">${checkCards(analysis)}</div></section>
+    <section class="report-section risks-section"><div class="report-section-title"><div><span>03</span><div><h2>风险队列</h2><p>按复现失败影响排序，不把“未知”包装成“通过”。</p></div></div><b>${analysis.risks.length} ITEMS</b></div><div class="report-risk-list">${riskCards(analysis)}</div></section>
   </div>`;
 }
 
-function graphView() { return `<div class="single-view panel"><div class="panel-heading"><div><span class="section-index">02</span><div><h2>完整 Claim—Artifact 证据图</h2><p>每个结论、代码与数据关系均可追溯</p></div></div><button class="secondary-button" data-view="overview">返回总览</button></div>${graph(true)}<div class="graph-insights"><div><small>节点</small><strong>18</strong><span>7 已验证</span></div><div><small>证据覆盖率</small><strong>76%</strong><span>较 README +28%</span></div><div><small>未知依赖</small><strong>3</strong><span>2 个影响执行</span></div><div><small>快照</small><strong>a81d9c</strong><span>不可变更</span></div></div></div>`; }
-
-function runsView() { return `<div class="single-view panel runs-view"><div class="panel-heading"><div><span class="section-index">04</span><div><h2>运行与决策记录</h2><p>所有人工批准和系统动作均留痕</p></div></div><button class="secondary-button" data-open-plan>新建验证</button></div><div class="run-timeline"><div class="run-event done"><i>✓</i><div><span><b>证据快照创建</b><time>10:42:18</time></span><p>锁定 PDF SHA-256 与 Git commit a81d9c</p></div></div><div class="run-event done"><i>✓</i><div><span><b>静态检查完成</b><time>10:43:02</time></span><p>12 个检查器通过，发现 2 个阻塞项和 1 个待确认项</p></div></div><div class="run-event current"><i>!</i><div><span><b>等待人工决策</b><time>现在</time></span><p>请选择验证方案并批准网络、算力与命令权限</p></div></div></div></div>`; }
-
-function dashboardTemplate() {
-  return `<main class="app-shell"><aside class="sidebar"><button class="sidebar-brand" data-reset>${brand()}</button><nav class="side-nav"><button class="active"><span>⌂</span>工作台</button><button><span>◎</span>复现任务<b>1</b></button><button><span>◇</span>评测集</button><button><span>⌁</span>检查器</button></nav><div class="sidebar-section"><small>当前项目</small><button class="project-link"><i>UM</i><span><strong>Uni-MoE</strong><small>审计进行中</small></span><b>•••</b></button></div><div class="sidebar-bottom"><div class="quota"><span><b>本月分析</b><small>3 / 20</small></span><div><i></i></div></div><button><span>?</span>文档与反馈</button><button class="user-button"><i>李</i><span><b>研究者账户</b><small>Demo workspace</small></span></button></div></aside>
-  <section class="workspace"><header class="workspace-topbar"><div class="breadcrumb"><span>复现任务</span><b>/</b><strong>Uni-MoE readiness audit</strong></div><div class="top-actions"><span class="sync-status"><i></i>证据快照已锁定</span><button data-export>导出报告</button><button class="avatar">李</button></div></header>
-    <div class="project-header"><div class="project-title-row"><div><div class="status-line"><span class="audit-badge">前置审计</span><span>最后更新于 2 分钟前</span></div><h1>Uni-MoE: Scaling Unified Multimodal Models</h1><p><span>▣ uni-moe-paper.pdf</span><span>⌘ reprogate-lab/uni-moe</span><span>⑂ commit a81d9c</span></p></div><div class="readiness-score"><div class="score-ring"><strong>64</strong><span>/100</span></div><div><b>有条件可复现</b><small>2 个关键阻塞项</small></div></div></div>
-      <div class="phase-track"><div class="done"><i>✓</i><span><b>证据快照</b><small>PDF + commit</small></span></div><div class="done"><i>✓</i><span><b>Claim 提取</b><small>发现 7 条</small></span></div><div class="current"><i>3</i><span><b>风险审计</b><small>正在查看</small></span></div><div><i>4</i><span><b>最小验证</b><small>等待审批</small></span></div><div><i>5</i><span><b>结果归因</b><small>尚未执行</small></span></div></div>
-      <div class="view-tabs"><button data-view="overview" class="active">审计总览</button><button data-view="graph">完整证据图</button><button data-view="runs">运行记录</button></div></div><div id="view-content">${overview()}</div></section></main>`;
+function evidenceView(analysis) {
+  const rows = analysis.checks.map(item => `<tr><td><span class="table-status ${item.status}"><i></i>${statusText(item.status)}</span></td><td><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.category)}</small></td><td><code>${escapeHtml(item.evidence?.path || "repository metadata")}</code><small>${escapeHtml(item.evidence?.detail || "")}</small></td><td>${sourceLink(item.evidence, "打开 ↗")}</td></tr>`).join("");
+  return `<section class="single-report-view"><div class="view-intro"><span>02 / EVIDENCE LEDGER</span><h2>证据清单</h2><p>本页记录“结论来自哪里”，方便面试展示、人工复核和后续差异扫描。</p></div>
+    <div class="snapshot-strip"><div><small>COMMIT SHA</small><code>${escapeHtml(analysis.repository.commitSha || "unknown")}</code></div><div><small>DEFAULT BRANCH</small><strong>${escapeHtml(analysis.repository.defaultBranch)}</strong></div><div><small>TREE FILES</small><strong>${formatNumber(analysis.files.total)}</strong></div><div><small>MANIFESTS READ</small><strong>${analysis.files.inspectedManifests?.length || 0}</strong></div></div>
+    <div class="evidence-table-wrap"><table class="evidence-table"><thead><tr><th>状态</th><th>检查</th><th>证据位置</th><th>来源</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <div class="method-note"><strong>证据边界</strong><p>文件存在性来自 commit 固定的递归树；README 与少量 manifest 内容由浏览器只读获取。外链可用性、代码可执行性与论文结论均未在这一阶段验证。</p></div>
+  </section>`;
 }
 
-function renderDashboard() { app.innerHTML = dashboardTemplate(); bindDashboard(); }
-
-function bindDashboard() {
-  app.addEventListener("click", handleDashboardClick, { once: true });
+function logView(analysis) {
+  const logs = state.logs.length ? state.logs : [{ at: analysis.analyzedAt, label: "载入演示快照", detail: "没有发起实时网络请求。", status: "sample" }];
+  const items = logs.map(item => `<li class="${escapeHtml(item.status)}"><i>${item.status === "error" ? "!" : item.status === "sample" ? "S" : "✓"}</i><div><span><strong>${escapeHtml(item.label)}</strong><time>${escapeHtml(formatDate(item.at))}</time></span><p>${escapeHtml(item.detail)}</p></div></li>`).join("");
+  return `<section class="single-report-view"><div class="view-intro"><span>03 / AUDIT LOG</span><h2>分析记录</h2><p>只展示本次浏览器会话真实发生的动作，不伪造后台任务或代码执行。</p></div><ol class="actual-log">${items}</ol>
+    <div class="method-grid"><article><small>数据来源</small><h3>GitHub Public REST API</h3><p>元数据、默认分支、commit 与递归文件树。</p></article><article><small>判定方法</small><h3>Deterministic Rules</h3><p>固定路径与文本信号规则，可在导出的 JSON 中复核。</p></article><article><small>隐私</small><h3>Browser-side Only</h3><p>${analysis.paper ? "PDF 只计算本地 SHA-256，正文未上传。" : "本次没有附加 PDF。"}</p></article></div>
+  </section>`;
 }
 
-function handleDashboardClick(event) {
-  const target = event.target.closest("button");
-  if (target?.dataset.reset !== undefined) { window.location.reload(); return; }
-  if (target?.dataset.claim) { state.activeClaim = target.dataset.claim; state.view = "overview"; updateView(); }
-  else if (target?.dataset.view) { state.view = target.dataset.view; updateView(); }
-  else if (target?.dataset.openPlan !== undefined) openPlan();
-  else if (target?.dataset.export !== undefined) downloadSpec();
-  bindDashboard();
+function reportHeader(analysis) {
+  const repo = analysis.repository;
+  const mode = analysis.mode === "sample" ? "SAMPLE · 冻结样例" : "LIVE · 实时公开数据";
+  return `<header class="report-topbar"><div class="report-breadcrumb"><span>REPOSITORY AUDIT</span><b>/</b><strong>${escapeHtml(repo.fullName)}</strong></div><div class="report-actions"><button data-share>复制重扫链接</button><button class="export-button" data-export>导出 ReproSpec JSON</button></div></header>
+  <section class="report-hero"><div class="report-kicker"><span class="mode-badge ${analysis.mode}">${mode}</span><time>分析于 ${escapeHtml(formatDate(analysis.analyzedAt))}</time></div><div class="report-hero-main"><div><h1>${escapeHtml(repo.fullName)}</h1><p>${escapeHtml(repo.description || "暂无仓库描述")}</p><div class="repo-facts"><span>${escapeHtml(repo.language || "Unknown")}</span><span>★ ${formatNumber(repo.stars)}</span><span>⑂ ${formatNumber(repo.forks)}</span><span>${escapeHtml(repo.license || "无许可证")}</span><span>${escapeHtml(repo.defaultBranch || "main")}@${escapeHtml((repo.commitSha || "unknown").slice(0, 7))}</span>${analysis.paper ? `<span>PDF SHA ${escapeHtml(analysis.paper.sha256.slice(0, 8))}…（仅指纹）</span>` : ""}</div></div><div class="readiness-card"><div class="report-score" style="--score:${analysis.readiness}"><strong>${analysis.readiness}</strong><span>/100</span></div><div><b>${escapeHtml(analysis.statusLabel)}</b><small>仓库静态准备度</small></div></div></div><p class="score-explainer">${escapeHtml(scoreExplanation(analysis))}</p></section>`;
 }
 
-function updateView() {
-  document.querySelectorAll("[data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === state.view));
-  const content = document.querySelector("#view-content");
-  content.innerHTML = state.view === "overview" ? overview() : state.view === "graph" ? graphView() : runsView();
+function renderReport() {
+  const analysis = state.analysis;
+  if (!analysis) return;
+  app.innerHTML = `<main class="report-shell">${reportRail(analysis)}<section class="report-workspace">${reportHeader(analysis)}<div id="report-view">${state.view === "overview" ? overviewView(analysis) : state.view === "evidence" ? evidenceView(analysis) : logView(analysis)}</div></section></main>`;
+  document.body.classList.add("report-open");
+  app.onclick = handleReportClick;
+  window.scrollTo({ top: 0, behavior: "instant" });
 }
 
-function openPlan() {
-  const modal = document.createElement("div"); modal.className = "modal-backdrop"; modal.id = "plan-modal";
-  modal.innerHTML = `<section class="plan-modal" role="dialog" aria-modal="true"><div class="modal-header"><div><span class="section-index">04</span><div><small>MINIMUM VERIFICATION</small><h2>选择验证深度</h2></div></div><button data-close>×</button></div><p class="modal-intro">目标不是完整复现整篇论文，而是用最低成本判断核心 Claim 是否值得继续投入。</p><div class="plan-options">${Object.entries(plans).map(([key, item]) => `<button data-plan="${key}" class="${state.selectedPlan === key ? "active" : ""}"><div class="plan-choice"><i></i>${key === "minimal" ? "<span>推荐</span>" : ""}</div><h3>${item.name}</h3><p>${item.subtitle}</p><dl><div><dt>预计时间</dt><dd>${item.time}</dd></div><div><dt>预计成本</dt><dd>${item.cost}</dd></div><div><dt>结论置信度</dt><dd>${item.confidence}</dd></div></dl></button>`).join("")}</div><div class="command-preview"><span>待批准命令</span><code>${plans[state.selectedPlan].command}</code><b>只读 · 无网络</b></div><label class="approval-check"><input id="approval" type="checkbox" ${state.approved ? "checked" : ""}><span>我已确认运行范围、预计成本和只读权限</span></label><div class="modal-actions"><button data-close>暂不执行</button><button data-approve ${state.approved ? "" : "disabled"}>批准并加入队列 <span>→</span></button></div></section>`;
-  document.body.append(modal);
-  modal.addEventListener("click", event => {
-    const button = event.target.closest("button");
-    if (event.target === modal || button?.dataset.close !== undefined) modal.remove();
-    else if (button?.dataset.plan) { state.selectedPlan = button.dataset.plan; modal.remove(); openPlan(); }
-    else if (button?.dataset.approve !== undefined) { modal.remove(); showToast("验证任务已批准并加入队列"); }
-  });
-  modal.querySelector("#approval").addEventListener("change", event => { state.approved = event.target.checked; modal.querySelector("[data-approve]").disabled = !state.approved; });
+async function copyText(value, message = "已复制") {
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    const input = document.createElement("textarea"); input.value = value; input.style.position = "fixed"; input.style.opacity = "0"; document.body.append(input); input.select(); document.execCommand("copy"); input.remove();
+  }
+  showToast(message);
+}
+
+function reportPayload() {
+  return {
+    schema: "reprogate/reprospec/v0.2",
+    generatedAt: new Date().toISOString(),
+    capability: { repositoryStaticAudit: true, paperContentParsed: false, codeExecuted: false, externalAssetsVerified: false },
+    ...state.analysis,
+  };
+}
+
+function downloadFile(filename, body, type) {
+  const url = URL.createObjectURL(new Blob([body], { type }));
+  const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function downloadSpec() {
-  const claim = claims.find(item => item.id === state.activeClaim) || claims[0]; const plan = plans[state.selectedPlan];
-  const payload = { schema: "reprospec/v0.1", project: "Uni-MoE: Unified Multimodal Mixture-of-Experts", snapshot: { paper_sha256: "9be7…a82c", git_commit: "a81d9c" }, claim: { id: claim.label, text: claim.title, evidence: claim.source }, readiness: 64, blockers: [{ code: "ARTIFACT_MISSING", item: "Uni-MoE-7B checkpoint", severity: "critical" }, { code: "PAPER_CODE_MISMATCH", item: "frame sampling 32 vs 16", severity: "high" }], minimal_verification: { name: plan.name, command: plan.command, expected_time: plan.time, expected_cost: plan.cost }, human_approval: state.approved };
-  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "uni-moe-reprospec.json"; anchor.click(); URL.revokeObjectURL(url); showToast("ReproSpec 已下载");
+  const name = (state.analysis.repository.fullName || "repository").replace("/", "-");
+  downloadFile(`${name}-reprospec.json`, JSON.stringify(reportPayload(), null, 2), "application/json");
+  showToast("ReproSpec JSON 已导出");
 }
 
-function showToast(message) { document.querySelector(".toast")?.remove(); const toast = document.createElement("div"); toast.className = "toast"; toast.innerHTML = `<span>✓</span>${message}`; document.body.append(toast); window.setTimeout(() => toast.remove(), 2600); }
+function downloadChecklist() {
+  const analysis = state.analysis;
+  const repo = analysis.repository;
+  const list = analysis.nextAction.checklist?.length ? analysis.nextAction.checklist : [analysis.nextAction.description];
+  const risks = analysis.risks.map(item => `- [ ] ${item.title}：${item.recommendation || item.description}`).join("\n") || "- [ ] 在隔离环境运行最小 smoke test";
+  const markdown = `# ${repo.fullName} · 最小复现验证任务单\n\n> 由 ReproGate v0.2 根据公开仓库静态证据生成。它不是论文复现结论。\n\n- Commit: \`${repo.commitSha}\`\n- 静态准备度: ${analysis.readiness}/100\n- 生成时间: ${new Date().toISOString()}\n\n## 下一步\n\n${list.map(item => `- [ ] ${item}`).join("\n")}\n\n## 风险处理\n\n${risks}\n\n## 运行记录\n\n- [ ] 记录 OS / Python / CUDA / GPU\n- [ ] 保存完整安装命令与日志\n- [ ] 使用固定小输入并记录预期输出\n- [ ] 禁止在未审查前执行高权限脚本\n`;
+  downloadFile(`${repo.name || "repository"}-verification-checklist.md`, markdown, "text/markdown");
+  showToast("验证任务单已导出");
+}
+
+function handleReportClick(event) {
+  const target = event.target.closest("button");
+  if (!target) return;
+  if (target.dataset.reset !== undefined) { window.location.href = window.location.pathname; return; }
+  if (target.dataset.view) { state.view = target.dataset.view; renderReport(); return; }
+  if (target.dataset.export !== undefined) { downloadSpec(); return; }
+  if (target.dataset.checklist !== undefined) { downloadChecklist(); return; }
+  if (target.dataset.copy !== undefined) { copyText(target.dataset.copy, "建议已复制"); return; }
+  if (target.dataset.share !== undefined) {
+    const url = new URL(window.location.href); url.search = ""; url.hash = ""; url.searchParams.set("repo", state.analysis.repository.fullName);
+    copyText(url.href, "重扫链接已复制");
+  }
+}
+
+function showToast(message) {
+  document.querySelector(".toast")?.remove();
+  const toast = document.createElement("div"); toast.className = "toast"; toast.innerHTML = `<span>✓</span>${escapeHtml(message)}`; document.body.append(toast);
+  window.setTimeout(() => toast.remove(), 2600);
+}
+
+bindSetup();
