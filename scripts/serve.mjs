@@ -7,7 +7,7 @@ const root = resolve(args.dir || "."); const port = Number(args.port || process.
 const mime = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json" };
 
 const server = createServer((request, response) => {
-  if (request.url === "/api/health") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ status: "ok", version: "0.2.0", analysis: "browser-side" })); return; }
+  if (request.url === "/api/health") { response.writeHead(200, { "content-type": "application/json" }); response.end(JSON.stringify({ status: "ok", version: "0.2.1", analysis: "browser-side" })); return; }
   const clean = normalize(decodeURIComponent((request.url || "/").split("?")[0])).replace(/^(\.\.(\/|\\|$))+/, "");
   let file = join(root, clean === "/" ? "index.html" : clean);
   if (!file.startsWith(root) || !existsSync(file)) file = join(root, "index.html");
