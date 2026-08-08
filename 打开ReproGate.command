@@ -3,7 +3,7 @@
 cd "$(dirname "$0")" || exit 1
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "未找到 Node.js。请直接双击 index.html 查看 Demo。"
+  echo "未找到 Node.js 22+。请先安装 Node.js，再运行此启动器。"
   read -r "?按回车键关闭窗口…"
   exit 1
 fi

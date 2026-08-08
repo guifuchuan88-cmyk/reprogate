@@ -4,10 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#132b27" />
-    <meta name="description" content="ReproGate — 论文复现前置审计与最小验证平台" />
+    <meta name="description" content="ReproGate 实时扫描公开 GitHub 仓库，生成带证据的复现风险与最小验证建议。" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="ReproGate — Live Repository Audit" />
+    <meta property="og:description" content="在烧掉 GPU 小时之前，先知道哪里会失败。" />
+    <meta property="og:url" content="https://guifuchuan88-cmyk.github.io/reprogate/" />
+    <meta property="og:image" content="https://guifuchuan88-cmyk.github.io/reprogate/public/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="ReproGate — Live Repository Audit" />
+    <meta name="twitter:description" content="在烧掉 GPU 小时之前，先知道哪里会失败。" />
+    <meta name="twitter:image" content="https://guifuchuan88-cmyk.github.io/reprogate/public/og.png" />
     <link rel="icon" href="./public/favicon.svg" />
     <link rel="stylesheet" href="./src/styles.css" />
-    <title>ReproGate — 论文复现前置审计</title>
+    <title>ReproGate — Live Repository Audit</title>
   </head>
   <body>
     <div id="app">
@@ -18,7 +27,7 @@
             <div><strong>ReproGate</strong><span>RESEARCH READINESS</span></div>
           </div>
           <div class="nav-actions">
-            <span class="version-pill">MVP · v0.1</span>
+            <span class="version-pill">LIVE · v0.2</span>
             <a href="#principles">设计原则</a>
             <a class="github-link" href="https://github.com/guifuchuan88-cmyk/reprogate" target="_blank" rel="noreferrer">GitHub ↗</a>
           </div>
@@ -28,54 +37,60 @@
           <div class="hero-copy">
             <p class="eyebrow"><span>01</span> REPRODUCIBILITY PRE-FLIGHT</p>
             <h1>在烧掉 GPU 小时之前，<em>先知道哪里会失败。</em></h1>
-            <p class="hero-lead">ReproGate 将论文结论映射到代码、数据与运行环境，暴露缺失证据，并生成成本最低的验证实验。</p>
+            <p class="hero-lead">ReproGate 实时读取公开 GitHub 仓库，将依赖、配置、测试、数据与模型资产变成可追溯证据，再给出复现准备度和最低成本的下一步。</p>
 
             <div class="project-form">
               <div class="form-heading">
-                <div><span class="step-number">01</span><h2>创建复现任务</h2></div>
-                <span>约 45 秒完成前置扫描</span>
+                <div><span class="step-number">01</span><h2>扫描公开仓库</h2></div>
+                <span>通常 5–15 秒 · 无需登录</span>
               </div>
               <label class="file-drop" id="file-drop">
                 <input id="paper-input" type="file" accept="application/pdf" />
                 <span class="drop-icon">⇧</span>
-                <span><strong id="file-name">拖入论文 PDF</strong><small id="file-hint">或点击选择 · 最大 25MB</small></span>
-                <b id="file-status">PDF</b>
+                <span><strong id="file-name">附加论文 PDF（可选）</strong><small id="file-hint">只在本机计算文件指纹，不上传内容 · 最大 25MB</small></span>
+                <b id="file-status">LOCAL</b>
               </label>
               <label class="repo-field">
                 <span>GitHub repository</span>
-                <div><i aria-hidden="true">⌘</i><input id="repo-input" placeholder="https://github.com/author/repository" /></div>
+                <div><i aria-hidden="true">⌘</i><input id="repo-input" type="url" inputmode="url" autocomplete="off" aria-describedby="repo-help repo-validation" placeholder="https://github.com/owner/repository" /></div>
               </label>
+              <div class="repo-help-row"><small id="repo-help">仅访问公开元数据与仓库文件，不执行代码</small><span id="repo-validation" aria-live="polite"></span></div>
+              <div class="analysis-progress" id="analysis-progress" hidden aria-live="polite">
+                <div class="progress-track"><i id="progress-bar"></i></div>
+                <p><span class="progress-pulse" aria-hidden="true"></span><strong id="progress-title">正在连接 GitHub…</strong><small id="progress-detail">验证仓库地址</small></p>
+              </div>
+              <div class="form-error" id="form-error" role="alert" hidden></div>
               <div class="form-footer">
-                <button class="primary-button" id="start-button" disabled><span class="button-label">开始前置审计</span><span>→</span></button>
-                <button class="sample-button" id="sample-button"><span>▶</span> 使用示例案例</button>
+                <button class="primary-button" id="start-button" disabled><span class="button-label">开始真实扫描</span><span>→</span></button>
+                <button class="sample-button" id="sample-button"><span>▶</span> 查看已完成样例</button>
               </div>
             </div>
 
             <div class="trust-row" id="principles">
-              <span><b>✓</b> 不自动执行陌生代码</span><span><b>✓</b> 每个结论都有证据</span><span><b>✓</b> 模型可替换</span>
+              <span><b>✓</b> 真实 GitHub 数据</span><span><b>✓</b> PDF 内容不上传</span><span><b>✓</b> 每条风险都有来源</span>
             </div>
           </div>
 
-          <div class="artifact-preview" aria-label="ReproSpec 预览">
-            <div class="preview-topline"><span>REPROSPEC / LIVE PREVIEW</span><b>● READY</b></div>
+          <div class="artifact-preview" aria-label="仓库静态审计预览">
+            <div class="preview-topline"><span>REPOSITORY AUDIT / PREVIEW</span><b>● EVIDENCE-BOUND</b></div>
             <div class="paper-sheet">
-              <div class="paper-meta"><span>CLAIM C-01</span><span>96% EVIDENCE</span></div>
-              <h3>“The proposed router improves accuracy by 4.8 points.”</h3>
-              <p>Evidence: Table 2 · ActivityNet-QA · commit a81d9c</p>
+              <div class="paper-meta"><span>CHECK DEP-01</span><span>REPOSITORY EVIDENCE</span></div>
+              <h3>“Can this environment be reconstructed next month?”</h3>
+              <p>Evidence: requirements.txt · repository tree · commit a81d9c</p>
               <div class="mini-graph">
-                <div class="mini-node claim-node">CLAIM</div><div class="mini-line"></div>
-                <div class="mini-nodes-row"><div class="mini-node ok">METRIC <span>✓</span></div><div class="mini-node warning">DATA <span>!</span></div><div class="mini-node danger">WEIGHT <span>×</span></div></div>
+                <div class="mini-node claim-node">REPOSITORY</div><div class="mini-line"></div>
+                <div class="mini-nodes-row"><div class="mini-node ok">README <span>✓</span></div><div class="mini-node warning">LOCKFILE <span>!</span></div><div class="mini-node danger">ASSET <span>?</span></div></div>
               </div>
-              <div class="risk-strip"><span>BLOCKER 01</span><strong>Checkpoint URL has expired</strong><small>Impact: experiment cannot start</small></div>
+              <div class="risk-strip"><span>CHECK 07</span><strong>Dependency lockfile is missing</strong><small>Evidence: repository tree · deterministic rule</small></div>
               <div class="spec-lines"><span style="width:86%"></span><span style="width:63%"></span><span style="width:74%"></span></div>
             </div>
             <div class="floating-score"><span>READINESS</span><strong>64</strong><small>/100</small></div>
-            <p class="preview-caption">不是一段“看起来正确”的回答，而是一份可审计、可执行的复现合同。</p>
+            <p class="preview-caption">不是一段“看起来正确”的回答，而是一份能回到 commit 与文件位置的静态审计。</p>
           </div>
         </section>
         <footer class="landing-footer"><span>PROVENANCE FIRST</span><span>MINIMUM VERIFICATION</span><span>HUMAN APPROVAL</span><span>FAILURE AS DATA</span></footer>
       </main>
     </div>
-    <script defer src="./src/app.js"></script>
+    <script type="module" src="./src/app.js"></script>
   </body>
 </html>
