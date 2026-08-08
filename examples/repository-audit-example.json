@@ -1,0 +1,37 @@
+{
+  "schema": "reprogate/reprospec/v0.2",
+  "generatedAt": "2026-08-08T10:00:00.000Z",
+  "capability": {
+    "repositoryStaticAudit": true,
+    "paperContentParsed": false,
+    "codeExecuted": false,
+    "externalAssetsVerified": false
+  },
+  "mode": "sample",
+  "repository": {
+    "fullName": "example/research-repository",
+    "url": "https://github.com/example/research-repository",
+    "defaultBranch": "main",
+    "commitSha": "example-snapshot-not-a-live-commit"
+  },
+  "readiness": 64,
+  "statusLabel": "有条件进入验证",
+  "checks": [
+    {
+      "id": "dependency-lock",
+      "category": "环境",
+      "label": "依赖可锁定",
+      "status": "warning",
+      "summary": "发现依赖清单，但没有对应锁文件。",
+      "evidence": {
+        "path": "requirements.txt",
+        "source": "frozen sample"
+      },
+      "recommendation": "提交包含哈希的锁文件。"
+    }
+  ],
+  "nextAction": {
+    "title": "先锁定依赖",
+    "description": "从全新环境生成锁文件，再运行固定输入的 smoke test。"
+  }
+}
