@@ -1,0 +1,16 @@
+{
+  "name": "reprogate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "论文复现前置审计与最小验证平台",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/serve.mjs --dir . --port 4173",
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/serve.mjs --dir dist --port 8080",
+    "test": "npm run build && node --test tests/product.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
