@@ -15,7 +15,7 @@
     <meta name="twitter:description" content="审计研究仓库与金融推理证据，在投入算力或发布答案前定位失败。" />
     <meta name="twitter:image" content="https://guifuchuan88-cmyk.github.io/reprogate/public/og.png" />
     <link rel="icon" href="./public/favicon.svg" />
-    <link rel="stylesheet" href="./src/styles.css?v=0.3.0" />
+    <link rel="stylesheet" href="./src/styles.css?v=0.4.0" />
     <title>ReproGate — Evidence-first Reproduction Audit</title>
   </head>
   <body>
@@ -27,9 +27,9 @@
             <div><strong>ReproGate</strong><span>RESEARCH READINESS</span></div>
           </div>
           <div class="nav-actions">
-            <span class="version-pill">LIVE · v0.3</span>
+            <span class="version-pill">APP · v0.4</span>
             <a href="#principles">设计原则</a>
-            <button class="nav-lab-button" id="nav-finance-button">金融实验</button>
+            <button class="nav-lab-button" id="nav-finance-button">金融审计台</button>
             <a class="github-link" href="https://github.com/guifuchuan88-cmyk/reprogate" target="_blank" rel="noreferrer">GitHub ↗</a>
           </div>
         </header>
@@ -56,7 +56,7 @@
                 <div><i aria-hidden="true">⌘</i><input id="repo-input" type="url" inputmode="url" autocomplete="off" aria-describedby="repo-help repo-validation" placeholder="https://github.com/owner/repository" /></div>
               </label>
               <div class="repo-help-row"><small id="repo-help">仅访问公开元数据与仓库文件，不执行代码</small><span id="repo-validation" aria-live="polite"></span></div>
-              <div class="analysis-progress" id="analysis-progress" hidden aria-live="polite">
+              <div class="analysis-progress" id="analysis-progress" hidden aria-live="polite" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                 <div class="progress-track"><i id="progress-bar"></i></div>
                 <p><span class="progress-pulse" aria-hidden="true"></span><strong id="progress-title">正在连接 GitHub…</strong><small id="progress-detail">验证仓库地址</small></p>
               </div>
@@ -67,8 +67,8 @@
               </div>
               <button class="industry-entry" id="finance-lab-button">
                 <span class="industry-index">INDUSTRY LAB 01</span>
-                <span class="industry-copy"><strong>可审计金融推理</strong><small>FinanceBench × FinQA 方法切片 · 内置样例 · 无需 API Key</small></span>
-                <b>打开实验 →</b>
+                <span class="industry-copy"><strong>可审计金融推理</strong><small>FinanceBench / FinQA 评测范式启发 · 原创合成案例 · 无需 API Key</small></span>
+                <b>打开审计台 →</b>
               </button>
             </div>
 
@@ -97,6 +97,6 @@
         <footer class="landing-footer"><span>PROVENANCE FIRST</span><span>MINIMUM VERIFICATION</span><span>HUMAN APPROVAL</span><span>FAILURE AS DATA</span></footer>
       </main>
     </div>
-    <script type="module" src="./src/app.js?v=0.3.0"></script>
+    <script type="module" src="./src/app.js?v=0.4.0"></script>
   </body>
 </html>

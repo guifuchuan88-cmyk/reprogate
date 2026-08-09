@@ -9,6 +9,7 @@ import {
   FINANCE_CASES,
   FINANCE_AUDIT_SAMPLES,
   FinanceAuditError,
+  createReferenceCandidate,
   formatProgram,
   summarizeFinancialAudits,
 } from "../src/finance-audit.js";
@@ -145,6 +146,27 @@ test("supports non-mutating candidate overrides and stable case summaries", () =
   assert.ok(first.summary.readinessScore >= 0 && first.summary.readinessScore <= 100);
   assert.ok(first.summary.evidenceCoverage >= 0 && first.summary.evidenceCoverage <= 100);
   assert.ok(Object.isFrozen(first.summary));
+});
+
+test("builds a deeply independent frozen reference candidate", () => {
+  const formula = { op: "divide", args: [{ ref: "profit" }, { ref: "revenue" }] };
+  const expected = {
+    answer: 0.1,
+    unit: "ratio",
+    evidenceIds: ["ev-profit"],
+    denominatorRef: "revenue",
+    formula,
+  };
+  const candidate = createReferenceCandidate({ id: "independent-reference", expected });
+
+  assert.equal(candidate.id, "independent-reference-reference");
+  assert.equal(candidate.label, "参考答案回放");
+  assert.notEqual(candidate.formula, formula);
+  assert.notEqual(candidate.evidenceIds, expected.evidenceIds);
+  assert.ok(Object.isFrozen(candidate.formula));
+  assert.ok(Object.isFrozen(candidate.evidenceIds));
+  assert.equal(Object.isFrozen(formula), false);
+  assert.equal(Object.isFrozen(expected.evidenceIds), false);
 });
 
 test("rejects corrupted reference fixtures instead of hiding benchmark errors", () => {

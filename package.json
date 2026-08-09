@@ -1,6 +1,6 @@
 {
   "name": "reprogate",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "研究仓库与金融推理工件的证据优先复现审计平台",
   "type": "module",

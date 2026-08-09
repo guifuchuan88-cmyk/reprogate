@@ -1,6 +1,6 @@
 # Architecture
 
-## v0.3：双审计对象的浏览器端架构
+## v0.4：双审计对象与浏览器本地快照闭环
 
 ```text
 Browser UI
@@ -25,14 +25,20 @@ Browser UI
        ├── finance-audit.js
        │    ├── whitelisted formula AST
        │    ├── deterministic execution trace
-       │    └── evidence/unit/denominator/numeric checks
+       │    ├── evidence/unit/denominator/numeric checks
+       │    └── baseline/reference comparison delta
+       ├── finance-experiment.js
+       │    ├── privacy-bounded comparison snapshot
+       │    ├── versioned localStorage snapshots (max 20)
+       │    └── JSON / Markdown serialization
        └── case report
-            ├── first divergence
-            ├── baseline vs minimum repair
-            └── finance audit JSON
+            ├── primary diagnosis
+            ├── baseline vs reference answer
+            ├── filter + versioned deep link
+            └── finance audit JSON + Markdown card
 ```
 
-页面可以部署在 GitHub Pages；静态站点不保存论文、仓库内容或分析结果。匿名 GitHub REST API 的限额由客户端直接承担，界面会显示限流恢复信息。
+页面可以部署在 GitHub Pages；静态站点不上传论文、仓库内容或分析结果。只有用户主动点击“保存快照”时，页面才在当前浏览器配置的 localStorage 中保存案例/候选元数据、候选与参考数值、单位、格式化公式、分数和审计摘要；不保存分母引用、证据 ID、完整证据原文、PDF 或用户文件。匿名 GitHub REST API 的限额由客户端直接承担，界面会显示限流恢复信息。
 
 金融案例不需要网络请求或运行时 API Key。`FINANCE_CASES` 为模块内深度冻结的原创合成 fixture；页面只执行结构化数据表达的六种白名单二元运算，不使用 `eval`、`Function` 或动态代码。
 
@@ -72,4 +78,4 @@ Web → API → PostgreSQL
 
 ## ReproSpec
 
-`reprogate/reprospec/v0.2` 继续记录仓库快照、证据、检查、风险、下一步和可选 PDF 指纹。`reprogate/finance-reasoning-audit/v0.3` 记录案例来源边界、证据、候选、参考程序、确定性评测与能力声明。两种导出都不依赖聊天记录。
+`reprogate/reprospec/v0.2` 继续记录仓库快照、证据、检查、风险、下一步和可选 PDF 指纹。`reprogate/finance-reasoning-audit/v0.4` 增加基线/参考答案比较结果；`reprogate/finance-comparison-snapshot/v0.4` 是不含完整证据原文的浏览器本地对比快照。所有导出都不依赖聊天记录。

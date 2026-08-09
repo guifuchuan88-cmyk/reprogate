@@ -1,5 +1,20 @@
-import { analyzeRepository, parseGitHubRepository, RepositoryAnalysisError } from "./github-analyzer.js?v=0.3.0";
-import { FINANCE_CASES, auditFinanceCase, formatProgram } from "./finance-audit.js?v=0.3.0";
+import { analyzeRepository, parseGitHubRepository, RepositoryAnalysisError } from "./github-analyzer.js?v=0.4.0";
+import {
+  FINANCE_CASES,
+  FINANCE_CASESET_VERSION,
+  auditFinanceCase,
+  compareFinanceCandidates,
+  createReferenceCandidate,
+  formatProgram,
+} from "./finance-audit.js?v=0.4.0";
+import {
+  FINANCE_EXPERIMENT_STORAGE_KEY,
+  appendFinanceExperiment,
+  createFinanceExperimentRecord,
+  parseFinanceExperimentStore,
+  removeFinanceExperiment,
+  serializeFinanceExperiment,
+} from "./finance-experiment.js?v=0.4.0";
 
 const app = document.querySelector("#app");
 const state = {
@@ -8,7 +23,13 @@ const state = {
   paper: null,
   logs: [],
   activeRequest: 0,
-  finance: { caseId: FINANCE_CASES[0]?.id || null, candidateId: null },
+  finance: {
+    caseId: FINANCE_CASES[0]?.id || null,
+    candidateId: null,
+    view: "compare",
+    filters: { method: "all", issue: "all" },
+  },
+  financeHistory: [],
 };
 
 function escapeHtml(value) {
@@ -138,6 +159,7 @@ function validateRepositoryInput(elements, { announce = true } = {}) {
 
 function updateProgress(elements, percent, title, detail) {
   elements.progress.hidden = false;
+  elements.progress.setAttribute("aria-valuenow", String(percent));
   elements.progressBar.style.width = `${percent}%`;
   elements.progressTitle.textContent = title;
   elements.progressDetail.textContent = detail;
@@ -167,14 +189,22 @@ function bindSetup() {
   const queryRepo = params.get("repo");
   const queryCase = params.get("case");
   const queryCandidate = params.get("candidate");
+  const queryView = params.get("view");
+  const queryFixture = params.get("fixture");
   const financeButtons = [document.querySelector("#finance-lab-button"), document.querySelector("#nav-finance-button")].filter(Boolean);
+  state.financeHistory = loadFinanceHistory();
 
   if (queryRepo && queryCase) {
     elements.error.innerHTML = "<strong>分享链接参数冲突</strong><span>repo 与 case 不能同时使用。请保留一个审计对象后重试。</span>";
     elements.error.hidden = false;
   } else if (queryCase) {
     try {
-      openFinanceLab(queryCase, queryCandidate, { updateUrl: false });
+      const route = openFinanceRoute(queryCase, queryCandidate, { updateUrl: false, view: queryView });
+      if (queryFixture && queryFixture !== FINANCE_CASESET_VERSION) {
+        showToast("链接来自旧案例版本；当前展示的是最新版 fixture 回放");
+      } else if (route.candidateFallback) {
+        showToast("链接中的候选已失效，已回退到冻结基线");
+      }
       return;
     } catch (error) {
       elements.error.innerHTML = `<strong>找不到金融案例</strong><span>${escapeHtml(error.message)}</span>`;
@@ -278,7 +308,7 @@ function reportRail(analysis) {
       <button data-view="overview" class="${state.view === "overview" ? "active" : ""}"><span>01</span>决策总览</button>
       <button data-view="evidence" class="${state.view === "evidence" ? "active" : ""}"><span>02</span>证据清单 <b>${analysis.checks.length}</b></button>
       <button data-view="log" class="${state.view === "log" ? "active" : ""}"><span>03</span>分析记录</button>
-      <button data-finance><span>04</span>金融推理实验 <b>NEW</b></button>
+      <button data-finance><span>04</span>金融推理审计台 <b>NEW</b></button>
     </nav>
     <div class="rail-boundary"><small>THIS AUDIT DID</small><p>读取公开元数据与文件树<br>运行确定性静态规则</p><small>DID NOT</small><p>不执行仓库代码<br>不解析论文正文<br>不验证外部资产可用性</p></div>
   </aside>`;
@@ -396,7 +426,7 @@ function downloadChecklist() {
   const repo = analysis.repository;
   const list = analysis.nextAction.checklist?.length ? analysis.nextAction.checklist : [analysis.nextAction.description];
   const risks = analysis.risks.map(item => `- [ ] ${item.title}：${item.recommendation || item.description}`).join("\n") || "- [ ] 在隔离环境运行最小 smoke test";
-  const markdown = `# ${repo.fullName} · 最小复现验证任务单\n\n> 由 ReproGate v0.3 的仓库静态审计生成。它不是论文复现结论。\n\n- Commit: \`${repo.commitSha}\`\n- 静态准备度: ${analysis.readiness}/100\n- 生成时间: ${new Date().toISOString()}\n\n## 下一步\n\n${list.map(item => `- [ ] ${item}`).join("\n")}\n\n## 风险处理\n\n${risks}\n\n## 运行记录\n\n- [ ] 记录 OS / Python / CUDA / GPU\n- [ ] 保存完整安装命令与日志\n- [ ] 使用固定小输入并记录预期输出\n- [ ] 禁止在未审查前执行高权限脚本\n`;
+  const markdown = `# ${repo.fullName} · 最小复现验证任务单\n\n> 由 ReproGate v0.4 的仓库静态审计生成。它不是论文复现结论。\n\n- Commit: \`${repo.commitSha}\`\n- 静态准备度: ${analysis.readiness}/100\n- 生成时间: ${new Date().toISOString()}\n\n## 下一步\n\n${list.map(item => `- [ ] ${item}`).join("\n")}\n\n## 风险处理\n\n${risks}\n\n## 运行记录\n\n- [ ] 记录 OS / Python / CUDA / GPU\n- [ ] 保存完整安装命令与日志\n- [ ] 使用固定小输入并记录预期输出\n- [ ] 禁止在未审查前执行高权限脚本\n`;
   downloadFile(`${repo.name || "repository"}-verification-checklist.md`, markdown, "text/markdown");
   showToast("验证任务单已导出");
 }
@@ -406,14 +436,10 @@ function financeCandidateOptions(caseData) {
     ...item,
     label: index === 0 ? "冻结基线输出" : item.label || `候选 ${index + 1}`,
     variant: "baseline",
+    origin: "frozen-fixture",
   }));
-  const repaired = {
-    ...caseData.expected,
-    id: `${caseData.id}-repaired`,
-    label: "按证据口径最小修复",
-    variant: "repaired",
-  };
-  return [...baseline, repaired];
+  const reference = createReferenceCandidate(caseData);
+  return [...baseline, reference];
 }
 
 function resolveFinanceCase(caseId) {
@@ -429,6 +455,20 @@ function resolveFinanceCandidate(caseData, candidateId) {
   const match = candidates.find(item => item.id === candidateId);
   if (!match) throw new Error(`案例 ${caseData.id} 中不存在候选输出：${candidateId}`);
   return match;
+}
+
+function openFinanceRoute(caseId, candidateId, options = {}) {
+  const caseData = resolveFinanceCase(caseId);
+  let candidateFallback = false;
+  let candidate;
+  try {
+    candidate = resolveFinanceCandidate(caseData, candidateId);
+  } catch {
+    candidate = resolveFinanceCandidate(caseData);
+    candidateFallback = true;
+  }
+  openFinanceLab(caseData.id, candidate.id, options);
+  return { candidateFallback };
 }
 
 function financeFactLabel(key) {
@@ -456,14 +496,46 @@ function formatFinanceValue(value, unit = "") {
   return `${formatted}${unit ? ` ${unit}` : ""}`;
 }
 
+function financeCaseMatches(item, audit, filters) {
+  const methodMatches = filters.method === "all" || item.provenance.benchmarkStyle === filters.method;
+  const issueMatches = filters.issue === "all"
+    || (filters.issue === "pass" ? audit.status === "pass" : audit.issues.some(issue => issue.category === filters.issue));
+  return methodMatches && issueMatches;
+}
+
+function financeVisibleCases(activeId, filters = state.finance.filters) {
+  const evaluated = FINANCE_CASES.map(item => ({ item, audit: auditFinanceCase(item) }));
+  const matching = evaluated.filter(({ item, audit }) => financeCaseMatches(item, audit, filters));
+  const active = evaluated.find(entry => entry.item.id === activeId);
+  const activePinned = Boolean(active && !matching.some(entry => entry.item.id === activeId));
+  return { matching, visible: activePinned ? [active, ...matching] : matching, activePinned };
+}
+
+function financeCaseFilters(activeId) {
+  const { matching, visible, activePinned } = financeVisibleCases(activeId);
+  const methodOptions = [["all", "全部范式"], ["FinanceBench", "FinanceBench-inspired"], ["FinQA", "FinQA-inspired"]];
+  const issueOptions = [["all", "全部故障"], ["pass", "PASS"], ["evidence", "证据"], ["unit", "单位"], ["denominator", "分母"], ["numeric", "数值"]];
+  const options = visible.map(({ item }) => `<option value="${escapeHtml(item.id)}" ${item.id === activeId ? "selected" : ""}>${escapeHtml(item.title)}</option>`).join("");
+  return `<div class="finance-case-filter-controls">
+    <label><span>BENCHMARK-INSPIRED STYLE</span><select data-finance-filter-method aria-label="按评测范式标签筛选案例">${methodOptions.map(([value, label]) => `<option value="${value}" ${state.finance.filters.method === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+    <label><span>FAILURE</span><select data-finance-filter-issue aria-label="按故障类型筛选案例">${issueOptions.map(([value, label]) => `<option value="${value}" ${state.finance.filters.issue === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+  </div>
+  <label class="finance-mobile-case-picker"><span>CASE · ${matching.length}/${FINANCE_CASES.length}${activePinned ? " · 当前案例置顶" : ""}</span><select data-finance-mobile-case aria-label="选择金融审计案例">${options}</select></label>`;
+}
+
 function financeCaseList(activeId) {
-  return FINANCE_CASES.map((item, index) => {
-    const audit = auditFinanceCase(item);
+  const { matching, visible, activePinned } = financeVisibleCases(activeId);
+  if (!visible.length) return `<div class="finance-case-empty"><strong>没有匹配案例</strong><span>调整方法或故障筛选后重试。</span></div>`;
+  const noMatchNotice = !matching.length && activePinned
+    ? `<div class="finance-case-empty"><strong>0 个筛选结果</strong><span>下方仅保留当前案例，便于继续查看上下文。</span></div>`
+    : "";
+  return `<small>${matching.length}/${FINANCE_CASES.length} CASES${activePinned ? " · CURRENT PINNED" : ""}</small>${noMatchNotice}${visible.map(({ item, audit }) => {
+    const index = FINANCE_CASES.findIndex(candidate => candidate.id === item.id);
     const status = audit.status === "pass" ? "PASS" : `${audit.metrics.issueCount} ISSUE${audit.metrics.issueCount === 1 ? "" : "S"}`;
-    return `<button class="finance-case-button ${item.id === activeId ? "active" : ""}" data-finance-case="${escapeHtml(item.id)}" aria-pressed="${item.id === activeId}">
-      <span>${String(index + 1).padStart(2, "0")}</span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.provenance.benchmarkStyle)} · ${escapeHtml(status)}</small></div>
+    return `<button class="finance-case-button ${item.id === activeId ? "active" : ""}" data-finance-case="${escapeHtml(item.id)}" aria-current="${item.id === activeId ? "page" : "false"}">
+      <span>${String(index + 1).padStart(2, "0")}</span><div><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.provenance.benchmarkStyle)}-INSPIRED · ${escapeHtml(status)}</small></div>
     </button>`;
-  }).join("");
+  }).join("")}`;
 }
 
 function financeEvidence(caseData, audit) {
@@ -498,13 +570,127 @@ function financeIssues(audit) {
   </article>`).join("");
 }
 
-function financeAuditPayload(caseData, candidate, audit) {
+function loadFinanceHistory() {
+  try {
+    return parseFinanceExperimentStore(window.localStorage.getItem(FINANCE_EXPERIMENT_STORAGE_KEY));
+  } catch {
+    return [];
+  }
+}
+
+function persistFinanceHistory(records) {
+  try {
+    window.localStorage.setItem(FINANCE_EXPERIMENT_STORAGE_KEY, JSON.stringify(records));
+    state.financeHistory = records;
+    return true;
+  } catch {
+    showToast("浏览器禁止本地存储，本次快照没有保存");
+    return false;
+  }
+}
+
+function financeComparisonBundle(caseData) {
+  const candidates = financeCandidateOptions(caseData);
+  const baselineCandidate = candidates[0];
+  const referenceCandidate = candidates.at(-1);
   return {
-    schema: "reprogate/finance-reasoning-audit/v0.3",
+    candidates,
+    baselineCandidate,
+    referenceCandidate,
+    comparison: compareFinanceCandidates(caseData, baselineCandidate, referenceCandidate),
+  };
+}
+
+function createCurrentFinanceExperiment() {
+  const caseData = resolveFinanceCase(state.finance.caseId);
+  const { baselineCandidate, referenceCandidate, comparison } = financeComparisonBundle(caseData);
+  const createdAt = new Date().toISOString();
+  const randomPart = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return createFinanceExperimentRecord({
+    id: `${caseData.id}-${randomPart}`,
+    createdAt,
+    caseData,
+    baselineCandidate,
+    referenceCandidate,
+    comparison,
+    view: state.finance.view,
+    activeCandidateId: state.finance.candidateId,
+  });
+}
+
+function financeIssueTags(audit, emptyLabel = "NO FINDINGS") {
+  if (!audit.issues.length) return `<span class="finance-issue-tag pass">${escapeHtml(emptyLabel)}</span>`;
+  return audit.issues.map(item => `<span class="finance-issue-tag">${escapeHtml(item.code)}</span>`).join("");
+}
+
+function financeComparisonView(caseData, baselineCandidate, referenceCandidate, comparison) {
+  const delta = comparison.delta.score > 0 ? `+${comparison.delta.score}` : String(comparison.delta.score);
+  const resolved = comparison.delta.resolvedIssueCodes.length
+    ? comparison.delta.resolvedIssueCodes.map(code => `<span>${escapeHtml(code)}</span>`).join("")
+    : `<span class="neutral">无相对差异</span>`;
+  const run = (label, candidate, audit, tone) => `<article class="finance-compare-run ${tone}">
+    <header><span>${escapeHtml(label)}</span><b>${escapeHtml(audit.status.toUpperCase())}</b></header>
+    <div class="finance-compare-score"><strong>${audit.score}</strong><small>/100</small></div>
+    <dl><div><dt>证据覆盖</dt><dd>${audit.metrics.evidenceCoveragePercent}%</dd></div><div><dt>呈现 / 执行</dt><dd>${escapeHtml(formatFinanceValue(candidate.answer, candidate.unit))} / ${escapeHtml(formatFinanceValue(audit.calculatedValue, candidate.unit))}</dd></div></dl>
+    <div class="finance-compare-program"><small>PROGRAM</small><code>${escapeHtml(formatProgram(candidate.formula))}</code></div>
+    <div class="finance-issue-tags">${financeIssueTags(audit)}</div>
+  </article>`;
+
+  return `<section class="finance-comparison" aria-labelledby="finance-comparison-title">
+    <div class="finance-comparison-heading"><div><span>03</span><div><h3 id="finance-comparison-title">冻结基线与参考答案对照</h3><p>参考列直接回放案例参考对象，用于审计差异，不代表模型重新推理或自动修复。</p></div></div><div><button data-finance-save="comparison">保存对比快照</button><button data-finance-export-markdown>导出 Markdown 对比卡</button></div></div>
+    <div class="finance-comparison-grid">
+      ${run("冻结基线", baselineCandidate, comparison.baseline, "baseline")}
+      <div class="finance-compare-delta"><small>RELATIVE AUDIT DELTA</small><strong>${escapeHtml(delta)}</strong><span>分</span><div>${resolved}</div><p>${comparison.decision === "improved" ? "以上问题在参考对象中不再出现" : comparison.decision === "regressed" ? "参考对象引入了新的审计问题" : "两列审计结论一致"}</p></div>
+      ${run("参考答案回放", referenceCandidate, comparison.reference, "reference")}
+    </div>
+  </section>`;
+}
+
+function financeHistoryView() {
+  const records = state.financeHistory;
+  if (!records.length) return `<section class="finance-history"><div><span>BROWSER-LOCAL RECENT SNAPSHOTS</span><h3 id="finance-snapshot-heading" tabindex="-1">尚未保存对比快照</h3><p>保存后会在当前浏览器配置中记录案例/候选元数据、候选与参考数值、单位、格式化公式和审计摘要；不保存证据原文、PDF 或用户文件，也不会上传。</p></div></section>`;
+  return `<section class="finance-history">
+    <div class="finance-history-heading"><div><span>BROWSER-LOCAL RECENT SNAPSHOTS · ${records.length}/20</span><h3 id="finance-snapshot-heading" tabindex="-1">最近对比快照</h3><p>仅保存在当前浏览器配置，不会上传；保存案例/候选元数据、数值、单位、格式化公式和审计摘要，不含证据原文或 PDF。</p></div><button data-finance-history-clear>清空全部</button></div>
+    <div class="finance-history-list">${records.map(record => `<article><button class="finance-history-open" data-finance-history-open="${escapeHtml(record.id)}"><span><b>${escapeHtml(record.case.title)}</b><small>${escapeHtml(formatDate(record.createdAt))} · ${escapeHtml(record.case.benchmarkStyle)}-inspired</small></span><strong>${record.baseline.score} → ${record.reference.score}</strong></button><button class="finance-history-delete" data-finance-history-delete="${escapeHtml(record.id)}" aria-label="删除 ${escapeHtml(record.case.title)} 的对比快照">×</button></article>`).join("")}</div>
+  </section>`;
+}
+
+function saveFinanceExperiment(source = "top") {
+  const record = createCurrentFinanceExperiment();
+  const next = appendFinanceExperiment(state.financeHistory, record);
+  if (!persistFinanceHistory(next)) return;
+  renderFinanceLab({ preserveScroll: true, focusSelector: `[data-finance-save="${source === "comparison" ? "comparison" : "top"}"]` });
+  showToast("对比快照已保存到当前浏览器");
+}
+
+function downloadFinanceExperimentMarkdown() {
+  const record = createCurrentFinanceExperiment();
+  downloadFile(`${record.case.id}-comparison-card.md`, serializeFinanceExperiment(record, "markdown"), "text/markdown");
+  showToast("Markdown 对比卡已导出");
+}
+
+function copyFinanceShareLink() {
+  const caseData = resolveFinanceCase(state.finance.caseId);
+  const candidate = resolveFinanceCandidate(caseData, state.finance.candidateId);
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("case", caseData.id);
+  url.searchParams.set("candidate", candidate.id);
+  url.searchParams.set("view", state.finance.view);
+  url.searchParams.set("fixture", FINANCE_CASESET_VERSION);
+  copyText(url.href, "当前 fixture 版本链接已复制");
+}
+
+function financeAuditPayload(caseData, candidate, audit) {
+  const { baselineCandidate, referenceCandidate, comparison } = financeComparisonBundle(caseData);
+  return {
+    schema: "reprogate/finance-reasoning-audit/v0.4",
     generatedAt: new Date().toISOString(),
     mode: "synthetic-frozen-replay",
+    fixtureVersion: FINANCE_CASESET_VERSION,
     capability: {
-      benchmarkMethodReferenced: true,
+      benchmarkInspiredEvaluation: true,
       benchmarkRecordCopied: false,
       deterministicVerifierExecuted: true,
       modelInvoked: false,
@@ -517,6 +703,11 @@ function financeAuditPayload(caseData, candidate, audit) {
     candidate,
     reference: caseData.expected,
     evaluation: audit,
+    comparison: {
+      baselineCandidate,
+      referenceCandidate,
+      result: comparison,
+    },
   };
 }
 
@@ -534,26 +725,40 @@ function updateFinanceUrl(caseData, candidate, method = "pushState") {
   url.hash = "";
   url.searchParams.set("case", caseData.id);
   url.searchParams.set("candidate", candidate.id);
+  url.searchParams.set("view", state.finance.view);
+  url.searchParams.set("fixture", FINANCE_CASESET_VERSION);
   window.history[method]({}, "", url);
 }
 
-function openFinanceLab(caseId, candidateId, { updateUrl = false } = {}) {
+function openFinanceLab(caseId, candidateId, {
+  updateUrl = false,
+  view = state.finance.view || "compare",
+  preserveScroll = false,
+  focusSelector = null,
+} = {}) {
   const caseData = resolveFinanceCase(caseId);
   const candidate = resolveFinanceCandidate(caseData, candidateId);
+  const normalizedView = view === "single" ? "single" : "compare";
   state.activeRequest += 1;
   state.analysis = null;
   state.paper = null;
   state.logs = [];
   state.view = "overview";
-  state.finance = { caseId: caseData.id, candidateId: candidate.id };
+  state.finance = {
+    ...state.finance,
+    caseId: caseData.id,
+    candidateId: candidate.id,
+    view: normalizedView,
+  };
   if (updateUrl) updateFinanceUrl(caseData, candidate);
-  renderFinanceLab();
+  renderFinanceLab({ preserveScroll, focusSelector });
 }
 
-function renderFinanceLab() {
+function renderFinanceLab({ preserveScroll = false, focusSelector = null } = {}) {
+  const previousScroll = preserveScroll ? window.scrollY : 0;
   const caseData = resolveFinanceCase(state.finance.caseId);
   const candidate = resolveFinanceCandidate(caseData, state.finance.candidateId);
-  const candidates = financeCandidateOptions(caseData);
+  const { candidates, baselineCandidate, referenceCandidate, comparison } = financeComparisonBundle(caseData);
   const audit = auditFinanceCase(caseData, candidate);
   const verdictTitle = audit.status === "pass" ? "该候选输出可接受" : audit.status === "warning" ? "该候选输出需要人工复核" : "该候选输出应在发布前阻断";
   const verdictDetail = audit.issues[0]?.title || "全部确定性检查通过。";
@@ -565,23 +770,25 @@ function renderFinanceLab() {
   app.innerHTML = `<main class="finance-shell">
     <aside class="finance-rail">
       <button class="report-brand" data-reset>${brand()}</button>
-      <div class="finance-lab-stamp"><span>INDUSTRY LAB 01</span><h2>可审计金融推理</h2><p>冻结案例回放 · 证据归因 · 公式复算 · 故障定位</p></div>
-      <nav class="finance-case-list" aria-label="金融审计案例"><small>FROZEN CASE QUEUE · ${FINANCE_CASES.length}</small>${financeCaseList(caseData.id)}</nav>
+      <div class="finance-lab-stamp"><span>INDUSTRY LAB 01 · v0.4</span><h2>可审计金融推理</h2><p>筛选故障 · 参考对照 · 浏览器快照 · 版本链接</p></div>
+      ${financeCaseFilters(caseData.id)}
+      <nav class="finance-case-list" aria-label="金融审计案例">${financeCaseList(caseData.id)}</nav>
       <div class="finance-rail-boundary"><strong>SAFE REPLAY</strong><p>不调用模型<br>不执行任意代码<br>不构成金融建议</p></div>
     </aside>
     <section class="finance-workspace">
-      <header class="finance-topbar"><div class="finance-breadcrumb"><span>FINANCIAL REASONING AUDIT</span><b>/</b><strong>${escapeHtml(caseData.id)}</strong></div><div class="finance-top-actions"><a href="${escapeHtml(benchmarkUrl)}" target="_blank" rel="noreferrer">方法来源 ↗</a><button data-finance-export>导出审计 JSON</button></div></header>
+      <header class="finance-topbar"><div class="finance-breadcrumb"><span>FINANCIAL REASONING AUDIT</span><b>/</b><strong>${escapeHtml(caseData.id)}</strong></div><div class="finance-top-actions"><a href="${escapeHtml(benchmarkUrl)}" target="_blank" rel="noreferrer">范式来源 ↗</a><button class="secondary" data-finance-share>复制版本链接</button><button class="secondary" data-finance-save="top">保存快照</button><button data-finance-export>导出 JSON</button></div></header>
       <section class="finance-hero">
-        <div class="finance-hero-kicker"><span class="frozen">SAMPLE · FROZEN REPLAY</span><span class="deterministic">DETERMINISTIC</span><span>SYNTHETIC FIXTURE</span><span>NO API KEY</span></div>
+        <div class="finance-hero-kicker"><span class="frozen">SAMPLE · FROZEN REPLAY</span><span class="deterministic">DETERMINISTIC</span><span>SYNTHETIC FIXTURE</span><span>BROWSER-LOCAL SNAPSHOTS</span><span>NO API KEY</span></div>
         <h1>财报证据与公式审计台</h1>
-        <p>它不负责“生成一个像真的答案”，而是定位答案第一次偏离证据与参考口径的位置：检索、引用、单位、分母，还是最终数值。</p>
-        <div class="finance-method-links"><a href="https://github.com/patronus-ai/financebench" target="_blank" rel="noreferrer">FinanceBench 方法仓库 ↗</a><a href="https://github.com/czyssrs/FinQA" target="_blank" rel="noreferrer">FinQA 方法仓库 ↗</a><a href="https://aclanthology.org/2021.emnlp-main.300/" target="_blank" rel="noreferrer">FinQA 论文 ↗</a></div>
+        <p>它不负责“生成一个像真的答案”，而是把候选输出拆成证据、引用、单位、分母与数值，并给出最高优先级的可验证诊断。</p>
+        <div class="finance-method-links"><a href="https://github.com/patronus-ai/financebench" target="_blank" rel="noreferrer">FinanceBench 范式参考 ↗</a><a href="https://github.com/czyssrs/FinQA" target="_blank" rel="noreferrer">FinQA 范式参考 ↗</a><a href="https://aclanthology.org/2021.emnlp-main.300/" target="_blank" rel="noreferrer">FinQA 论文 ↗</a></div>
       </section>
       <div class="finance-content">
         <section class="finance-question-card">
-          <div class="finance-question-meta"><span>${escapeHtml(caseData.provenance.benchmarkStyle)}-STYLE</span><b>${escapeHtml(caseData.id)}</b><b>原创合成证据 · 非官方 benchmark 样本</b></div>
-          <h2>${escapeHtml(caseData.question)}</h2><p>${escapeHtml(caseData.title)} · ${escapeHtml(caseData.provenance.note)}</p>
-          <div class="candidate-switch"><span>OUTPUT REPLAY</span><div class="candidate-buttons">${candidates.map(item => `<button class="${item.id === candidate.id ? "active" : ""}" data-finance-candidate="${escapeHtml(item.id)}" aria-pressed="${item.id === candidate.id}">${escapeHtml(item.label)}</button>`).join("")}</div></div>
+          <div class="finance-question-meta"><span>${escapeHtml(caseData.provenance.benchmarkStyle)}-INSPIRED</span><b>${escapeHtml(caseData.id)}</b><b>原创合成证据 · 非官方 benchmark 样本</b></div>
+          <h2 id="finance-case-question" tabindex="-1">${escapeHtml(caseData.question)}</h2><p>${escapeHtml(caseData.title)} · ${escapeHtml(caseData.provenance.note)}</p>
+          <div class="finance-view-switch" role="group" aria-label="金融审计视图"><span>VIEW</span><button data-finance-view="compare" aria-pressed="${state.finance.view === "compare"}" class="${state.finance.view === "compare" ? "active" : ""}">基线 / 参考对照</button><button data-finance-view="single" aria-pressed="${state.finance.view === "single"}" class="${state.finance.view === "single" ? "active" : ""}">单项检查</button></div>
+          <div class="candidate-switch"><span>DETAIL REPLAY</span><div class="candidate-buttons" role="group" aria-label="选择详细回放输出">${candidates.map(item => `<button class="${item.id === candidate.id ? "active" : ""}" data-finance-candidate="${escapeHtml(item.id)}" aria-pressed="${item.id === candidate.id}">${escapeHtml(item.label)}</button>`).join("")}</div></div>
         </section>
         <div class="finance-metrics">
           <article class="${audit.score === 100 ? "metric-pass" : "metric-fail"}"><small>CASE AUDIT SCORE</small><strong>${audit.score}/100</strong><span>单案例审计分，不是 benchmark 准确率</span></article>
@@ -589,6 +796,7 @@ function renderFinanceLab() {
           <article class="${audit.trace.length ? "metric-pass" : "metric-warning"}"><small>PROGRAM EXECUTION</small><strong>${audit.trace.length} steps</strong><span>结构化白名单运算，不执行代码字符串</span></article>
           <article class="${outputAligned ? "metric-pass" : "metric-fail"}"><small>OUTPUT VERDICT</small><strong>${outputAligned ? "MATCH" : "DRIFT"}</strong><span>候选 ${escapeHtml(formatFinanceValue(candidate.answer, candidate.unit))} · 参考 ${escapeHtml(formatFinanceValue(caseData.expected.answer, caseData.expected.unit))}</span></article>
         </div>
+        ${state.finance.view === "compare" ? financeComparisonView(caseData, baselineCandidate, referenceCandidate, comparison) : ""}
         <div class="finance-grid">
           <section class="finance-panel"><div class="finance-panel-heading"><div><span>01</span><div><h3>证据账本</h3><p>每个公式输入都必须回到文档、页码和结构化事实。</p></div></div><b>${audit.evidence.selectedIds.length}/${audit.evidence.requiredIds.length} CITED</b></div><div class="finance-evidence-list">${financeEvidence(caseData, audit)}</div></section>
           <div>
@@ -597,32 +805,94 @@ function renderFinanceLab() {
               <div class="finance-output-strip"><div><small>候选呈现</small><strong>${escapeHtml(formatFinanceValue(candidate.answer, candidate.unit))}</strong></div><div><small>程序执行</small><strong>${escapeHtml(formatFinanceValue(audit.calculatedValue, candidate.unit))}</strong></div><div><small>参考答案</small><strong>${escapeHtml(formatFinanceValue(audit.expectedValue, caseData.expected.unit))}</strong></div></div>
               ${financeTrace(audit)}
             </div></section>
-            <section class="finance-verdict ${audit.status}" aria-live="polite"><div class="finance-verdict-summary"><span>${verdictIcon}</span><div><small>${escapeHtml(audit.decision.toUpperCase())} · FIRST DIVERGENCE</small><h3>${escapeHtml(verdictTitle)}</h3><p>${escapeHtml(verdictDetail)}</p></div></div><div class="finance-issue-list">${financeIssues(audit)}</div></section>
+            <section class="finance-verdict ${audit.status}" role="status" aria-live="polite"><div class="finance-verdict-summary"><span>${verdictIcon}</span><div><small>${escapeHtml(audit.decision.toUpperCase())} · PRIMARY DIAGNOSIS</small><h3>${escapeHtml(verdictTitle)}</h3><p>${escapeHtml(verdictDetail)}</p></div></div><div class="finance-issue-list">${financeIssues(audit)}</div></section>
           </div>
         </div>
-        <section class="finance-boundary"><span>METHOD & USAGE BOUNDARY</span><p>本页使用 ReproGate 原创合成财报片段，只复现 FinanceBench 的证据归因思路与 FinQA 的符号程序评测思路；没有复制官方数据记录。Gold/修复程序回放不等于真实模型推理，也不构成投资建议。</p><a href="${escapeHtml(benchmarkUrl)}" target="_blank" rel="noreferrer">核对方法来源 ↗</a></section>
+        ${financeHistoryView()}
+        <section class="finance-boundary"><span>METHOD & USAGE BOUNDARY</span><p>本页使用 ReproGate 原创合成财报片段，只参考 FinanceBench 的证据归因范式与 FinQA 的符号程序评测范式；没有复制官方数据记录。参考答案程序回放不等于真实模型推理，也不构成投资建议。</p><a href="${escapeHtml(benchmarkUrl)}" target="_blank" rel="noreferrer">核对范式来源 ↗</a></section>
       </div>
     </section>
   </main>`;
   document.body.classList.add("report-open");
   app.onclick = handleFinanceClick;
-  window.scrollTo({ top: 0, behavior: "instant" });
+  app.onchange = handleFinanceChange;
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: previousScroll, behavior: "instant" });
+    if (focusSelector) document.querySelector(focusSelector)?.focus({ preventScroll: true });
+  });
 }
 
 function handleFinanceClick(event) {
   const target = event.target.closest("button");
   if (!target) return;
   if (target.dataset.reset !== undefined) { window.location.href = window.location.pathname; return; }
-  if (target.dataset.financeCase) { openFinanceLab(target.dataset.financeCase, undefined, { updateUrl: true }); return; }
+  if (target.dataset.financeCase) { openFinanceLab(target.dataset.financeCase, undefined, { updateUrl: true, view: state.finance.view, focusSelector: "#finance-case-question" }); return; }
+  if (target.dataset.financeView) {
+    state.finance.view = target.dataset.financeView === "single" ? "single" : "compare";
+    const caseData = resolveFinanceCase(state.finance.caseId);
+    const candidate = resolveFinanceCandidate(caseData, state.finance.candidateId);
+    updateFinanceUrl(caseData, candidate, "replaceState");
+    renderFinanceLab({ preserveScroll: true, focusSelector: `[data-finance-view="${state.finance.view}"]` });
+    return;
+  }
   if (target.dataset.financeCandidate) {
     const caseData = resolveFinanceCase(state.finance.caseId);
     const candidate = resolveFinanceCandidate(caseData, target.dataset.financeCandidate);
     state.finance.candidateId = candidate.id;
     updateFinanceUrl(caseData, candidate, "replaceState");
-    renderFinanceLab();
+    renderFinanceLab({ preserveScroll: true, focusSelector: `[data-finance-candidate="${candidate.id}"]` });
+    return;
+  }
+  if (target.dataset.financeShare !== undefined) { copyFinanceShareLink(); return; }
+  if (target.dataset.financeSave !== undefined) { saveFinanceExperiment(target.dataset.financeSave); return; }
+  if (target.dataset.financeExportMarkdown !== undefined) { downloadFinanceExperimentMarkdown(); return; }
+  if (target.dataset.financeHistoryOpen) {
+    const record = state.financeHistory.find(item => item.id === target.dataset.financeHistoryOpen);
+    if (!record) { showToast("这条浏览器快照已不存在"); return; }
+    if (record.fixtureVersion !== FINANCE_CASESET_VERSION) {
+      showToast("该快照来自旧 fixture 版本，不能静默恢复为当前案例");
+      return;
+    }
+    try {
+      openFinanceLab(record.case.id, record.activeCandidateId, { updateUrl: true, view: record.view, focusSelector: "#finance-case-question" });
+    } catch {
+      showToast("案例或候选已变化，无法恢复这条快照");
+    }
+    return;
+  }
+  if (target.dataset.financeHistoryDelete) {
+    const next = removeFinanceExperiment(state.financeHistory, target.dataset.financeHistoryDelete);
+    if (persistFinanceHistory(next)) {
+      renderFinanceLab({ preserveScroll: true, focusSelector: "#finance-snapshot-heading" });
+      showToast("浏览器本地快照已删除");
+    }
+    return;
+  }
+  if (target.dataset.financeHistoryClear !== undefined) {
+    if (!window.confirm("清空当前浏览器配置中的全部金融对比快照？")) return;
+    if (persistFinanceHistory([])) {
+      renderFinanceLab({ preserveScroll: true, focusSelector: "#finance-snapshot-heading" });
+      showToast("浏览器本地快照已清空");
+    }
     return;
   }
   if (target.dataset.financeExport !== undefined) downloadFinanceAudit();
+}
+
+function handleFinanceChange(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLSelectElement)) return;
+  if (target.dataset.financeFilterMethod !== undefined) {
+    state.finance.filters.method = ["all", "FinanceBench", "FinQA"].includes(target.value) ? target.value : "all";
+    renderFinanceLab({ preserveScroll: true, focusSelector: "[data-finance-filter-method]" });
+    return;
+  }
+  if (target.dataset.financeFilterIssue !== undefined) {
+    state.finance.filters.issue = ["all", "pass", "evidence", "unit", "denominator", "numeric"].includes(target.value) ? target.value : "all";
+    renderFinanceLab({ preserveScroll: true, focusSelector: "[data-finance-filter-issue]" });
+    return;
+  }
+  if (target.dataset.financeMobileCase !== undefined) openFinanceLab(target.value, undefined, { updateUrl: true, view: state.finance.view, focusSelector: "#finance-case-question" });
 }
 
 function handleReportClick(event) {
@@ -642,9 +912,24 @@ function handleReportClick(event) {
 
 function showToast(message) {
   document.querySelector(".toast")?.remove();
-  const toast = document.createElement("div"); toast.className = "toast"; toast.innerHTML = `<span>✓</span>${escapeHtml(message)}`; document.body.append(toast);
+  const toast = document.createElement("div"); toast.className = "toast"; toast.setAttribute("role", "status"); toast.setAttribute("aria-live", "polite"); toast.innerHTML = `<span>✓</span>${escapeHtml(message)}`; document.body.append(toast);
   window.setTimeout(() => toast.remove(), 2600);
 }
 
-window.addEventListener("popstate", () => window.location.reload());
+window.addEventListener("popstate", () => {
+  const params = new URLSearchParams(window.location.search);
+  const caseId = params.get("case");
+  if (!caseId) { window.location.reload(); return; }
+  try {
+    const route = openFinanceRoute(caseId, params.get("candidate"), { updateUrl: false, view: params.get("view"), focusSelector: "#finance-case-question" });
+    const fixture = params.get("fixture");
+    if (fixture && fixture !== FINANCE_CASESET_VERSION) {
+      showToast("链接来自旧案例版本；当前展示的是最新版 fixture 回放");
+    } else if (route.candidateFallback) {
+      showToast("链接中的候选已失效，已回退到冻结基线");
+    }
+  } catch {
+    window.location.reload();
+  }
+});
 bindSetup();

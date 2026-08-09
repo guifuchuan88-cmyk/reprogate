@@ -11,10 +11,11 @@ await cp(join(root, "index.html"), join(dist, "index.html"));
 await cp(join(root, "src", "app.js"), join(dist, "src", "app.js"));
 await cp(join(root, "src", "github-analyzer.js"), join(dist, "src", "github-analyzer.js"));
 await cp(join(root, "src", "finance-audit.js"), join(dist, "src", "finance-audit.js"));
+await cp(join(root, "src", "finance-experiment.js"), join(dist, "src", "finance-experiment.js"));
 await cp(join(root, "src", "styles.css"), join(dist, "src", "styles.css"));
 await cp(join(root, "public", "favicon.svg"), join(dist, "public", "favicon.svg"));
 await cp(join(root, "public", "og.png"), join(dist, "public", "og.png"));
 
 const html = await readFile(join(dist, "index.html"), "utf8");
-await writeFile(join(dist, "index.html"), html.replace("LIVE · v0.3", "LIVE · v0.3 · BUILD"));
+await writeFile(join(dist, "index.html"), html.replace("APP · v0.4", "BUILD · v0.4"));
 console.log("ReproGate build created in dist/");

@@ -17,6 +17,8 @@ export const FINANCE_AUDIT_CATEGORIES = Object.freeze({
   NUMERIC: "numeric",
 });
 
+export const FINANCE_CASESET_VERSION = "synthetic-fixtures-1";
+
 export class FinanceAuditError extends Error {
   constructor(code, message, details = {}) {
     super(message);
@@ -31,6 +33,12 @@ function deepFreeze(value) {
   Object.freeze(value);
   for (const child of Object.values(value)) deepFreeze(child);
   return value;
+}
+
+function cloneData(value) {
+  if (Array.isArray(value)) return value.map(cloneData);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, cloneData(child)]));
 }
 
 function hasOwn(value, key) {
@@ -806,6 +814,65 @@ export function auditFinanceCase(caseData, candidate = null) {
     evidence: audit.evidence,
     units: audit.units,
     denominator: audit.denominator,
+  });
+}
+
+/** Builds an independent reference-answer candidate used by the comparison UI. */
+export function createReferenceCandidate(caseData) {
+  if (!caseData || typeof caseData !== "object" || Array.isArray(caseData)) {
+    throw new FinanceAuditError("INVALID_CASE", "金融审计案例必须是对象");
+  }
+  const reference = caseData.expected || caseData.reference;
+  if (!reference || typeof reference !== "object" || Array.isArray(reference)) {
+    throw new FinanceAuditError("INVALID_REFERENCE", "案例缺少可复算的参考口径", { caseId: caseData.id || null });
+  }
+  return deepFreeze({
+    ...cloneData(reference),
+    id: `${caseData.id}-reference`,
+    label: "参考答案回放",
+    variant: "reference",
+    origin: "reference-derived",
+  });
+}
+
+/** Compares two deterministic candidate audits without mutating either candidate or the fixture. */
+export function compareFinanceCandidates(caseData, baselineCandidate = null, referenceCandidate = null) {
+  const baseline = resolveFrontendCandidate(caseData, baselineCandidate);
+  const reference = referenceCandidate || createReferenceCandidate(caseData);
+  const baselineAudit = auditFinanceCase(caseData, baseline);
+  const referenceAudit = auditFinanceCase(caseData, reference);
+  const baselineCodes = new Set(baselineAudit.issues.map(item => item.code));
+  const referenceCodes = new Set(referenceAudit.issues.map(item => item.code));
+  const scoreDelta = referenceAudit.score - baselineAudit.score;
+  const statusRank = { fail: 0, warning: 1, pass: 2 };
+  const statusDelta = (statusRank[referenceAudit.status] ?? -1) - (statusRank[baselineAudit.status] ?? -1);
+  const resolvedIssueCodes = [...baselineCodes].filter(code => !referenceCodes.has(code));
+  const introducedIssueCodes = [...referenceCodes].filter(code => !baselineCodes.has(code));
+  const decision = statusDelta > 0
+    ? "improved"
+    : statusDelta < 0
+      ? "regressed"
+      : scoreDelta > 0 || (scoreDelta === 0 && resolvedIssueCodes.length > introducedIssueCodes.length)
+        ? "improved"
+        : scoreDelta < 0 || introducedIssueCodes.length > resolvedIssueCodes.length
+          ? "regressed"
+          : "unchanged";
+
+  return deepFreeze({
+    caseId: caseData.id,
+    decision,
+    baseline: baselineAudit,
+    reference: referenceAudit,
+    delta: {
+      score: scoreDelta,
+      evidenceCoveragePoints: referenceAudit.metrics.evidenceCoveragePercent - baselineAudit.metrics.evidenceCoveragePercent,
+      resolvedIssueCodes,
+      remainingIssueCodes: [...baselineCodes].filter(code => referenceCodes.has(code)),
+      introducedIssueCodes,
+      calculatedValueChanged: !Object.is(baselineAudit.calculatedValue, referenceAudit.calculatedValue),
+      reportedValueChanged: !Object.is(baselineAudit.reportedValue, referenceAudit.reportedValue),
+      statusChanged: baselineAudit.status !== referenceAudit.status,
+    },
   });
 }
 
